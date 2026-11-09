@@ -17,8 +17,21 @@
 
 ---
 
+## 界面截图
+
+<p align="center">
+  <img src="images/screenshots/home.png" height="320" alt="首页">
+  <img src="images/screenshots/explore.png" height="320" alt="探索">
+  <img src="images/screenshots/category.png" height="320" alt="分类">
+  <img src="images/screenshots/favorites.png" height="320" alt="收藏">
+</p>
+<p align="center"><sub>首页 · 探索 · 分类 · 收藏</sub></p>
+
+---
+
 ## 目录
 
+- [界面截图](#界面截图)
 - [这是什么](#这是什么)
 - [核心特性](#核心特性)
 - [下载与安装](#下载与安装)
