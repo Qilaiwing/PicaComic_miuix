@@ -11,10 +11,15 @@ import io.flutter.plugins.GeneratedPluginRegistrant
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.activity.result.contract.ActivityResultContracts
 import android.os.Environment
 import android.Manifest
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
+import java.io.File
 import android.os.Bundle
 import com.google.android.gms.common.GoogleApiAvailability
 
@@ -27,6 +32,14 @@ class MainActivity: FlutterFragmentActivity() {
 
     var volumeListen = VolumeListen()
     var listening = false
+
+    private var storagePermissionResult: MethodChannel.Result? = null
+    private val STORAGE_PERMISSION_REQ = 9911
+    private var pickDirectoryResult: MethodChannel.Result? = null
+    private val pickDirectoryLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            handlePickedDirectory(uri)
+        }
 
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -74,6 +87,46 @@ class MainActivity: FlutterFragmentActivity() {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             else
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+
+        //应用内更新: 调起系统安装器
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger,"com.picacomic_miuix/installer").setMethodCallHandler{
+                call, res ->
+            when (call.method) {
+                "install" -> {
+                    val path = call.argument<String>("path")
+                    if (path == null || !File(path).exists()) {
+                        res.error("not_found", "安装包不存在", null)
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+                        res.error("need_permission", "need_permission", null)
+                    } else {
+                        try {
+                            val uri = FileProvider.getUriForFile(this, "$packageName.update_provider", File(path))
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, "application/vnd.android.package-archive")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            res.success("ok")
+                        } catch (e: Exception) {
+                            res.error("install", e.message, null)
+                        }
+                    }
+                }
+                "permission" -> {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:$packageName")))
+                        }
+                        res.success(null)
+                    } catch (e: Exception) {
+                        res.error("permission", e.message, null)
+                    }
+                }
+                else -> res.notImplemented()
+            }
         }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger,"pica_comic/playServer").setMethodCallHandler{
@@ -126,6 +179,45 @@ class MainActivity: FlutterFragmentActivity() {
                         ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
                             && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED)
                 }
+            } else if (call.method == "request_storage") {
+                // Gallery save on API < 29 writes public Pictures/ and needs WRITE_EXTERNAL_STORAGE.
+                // API 29+ uses MediaStore scoped inserts — no runtime write permission.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    res.success(true)
+                } else {
+                    val writeGranted = ContextCompat.checkSelfPermission(
+                        this, Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (writeGranted) {
+                        res.success(true)
+                    } else if (storagePermissionResult != null) {
+                        res.error("busy", "permission request already in flight", null)
+                    } else {
+                        storagePermissionResult = res
+                        ActivityCompat.requestPermissions(
+                            this,
+                            arrayOf(
+                                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                                Manifest.permission.READ_EXTERNAL_STORAGE,
+                            ),
+                            STORAGE_PERMISSION_REQ,
+                        )
+                    }
+                }
+            } else if (call.method == "pick_directory") {
+                if (pickDirectoryResult != null) {
+                    res.error("busy", "directory picker already in flight", null)
+                } else {
+                    pickDirectoryResult = res
+                    try {
+                        pickDirectoryLauncher.launch(null)
+                    } catch (e: Exception) {
+                        pickDirectoryResult = null
+                        res.error("pick_directory", e.message, null)
+                    }
+                }
+            } else if (call.method == "sdk_int") {
+                res.success(Build.VERSION.SDK_INT)
             }
 
         }
@@ -145,6 +237,70 @@ class MainActivity: FlutterFragmentActivity() {
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == STORAGE_PERMISSION_REQ) {
+            val ok = grantResults.isNotEmpty() &&
+                grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+            storagePermissionResult?.success(ok)
+            storagePermissionResult = null
+        }
+    }
+
+    private fun handlePickedDirectory(uri: Uri?) {
+        val pending = pickDirectoryResult
+        pickDirectoryResult = null
+        if (pending == null) return
+        if (uri == null) {
+            pending.success(null)
+            return
+        }
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (_: SecurityException) {
+        } catch (_: Exception) {
+        }
+        val path = pathFromTreeUri(uri)
+        val displayName = displayNameFromTreeUri(uri)
+        pending.success(
+            hashMapOf(
+                "uri" to uri.toString(),
+                "path" to path,
+                "displayName" to displayName,
+            )
+        )
+    }
+
+    private fun pathFromTreeUri(treeUri: Uri): String? {
+        return try {
+            val docId = DocumentsContract.getTreeDocumentId(treeUri)
+            val split = docId.split(":", limit = 2)
+            if (split.size < 2) return null
+            if (split[0] != "primary") return null
+            val relative = split[1]
+            File(Environment.getExternalStorageDirectory(), relative).absolutePath
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun displayNameFromTreeUri(treeUri: Uri): String {
+        return try {
+            val docId = DocumentsContract.getTreeDocumentId(treeUri)
+            val relative = if (docId.contains(":")) docId.substringAfter(":") else docId
+            if (relative.isBlank()) "storage" else relative
+        } catch (_: Exception) {
+            "storage"
+        }
     }
 
     private fun getDeviceInfo(): String{

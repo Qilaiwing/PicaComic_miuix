@@ -158,7 +158,8 @@ class TapController {
         return;
       }
       logic.tools = !logic.tools;
-      logic.update();
+      // Toolbars listen on id ToolBar; avoid rebuilding the page gallery.
+      logic.update(["ToolBar"]);
       if (logic.tools) {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
       } else {

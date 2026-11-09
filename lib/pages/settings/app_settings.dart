@@ -20,28 +20,32 @@ void findUpdate(BuildContext context) {
   });
 }
 
-/// 关于页「更新日志」: 拉取最新 release 的说明并以 Markdown 显示。
+
+/// 关于页「更新日志」: 显示当前已安装版本 (appVersion) 对应 release 的说明。
 Future<void> showLatestChangelog(BuildContext context) async {
   var loading = showLoadingDialog(context,
       allowCancel: true, barrierDismissible: false);
-  String? version;
+  const tag = "v$appVersion";
   String? notes;
+  var found = true;
+  var failed = false;
   try {
-    version = await getLatestVersion();
-    notes = await getUpdatesInfo();
-  } catch (_) {}
+    final r = await getCurrentVersionNotes();
+    notes = r.notes;
+    found = r.found;
+  } catch (_) {
+    failed = true;
+  }
   loading.close();
   if (!context.mounted) return;
-  if (version == null && notes == null) {
-    context.showMessage(message: "网络错误".tl);
-    return;
-  }
-  final url = await getDownloadUrl();
-  if (!context.mounted) return;
+  final url = getReleasePageUrl(found ? tag : null);
+  final String fallbackText = failed
+      ? "网络错误, 无法获取当前版本的更新日志".tl
+      : (found ? "该版本没有填写更新日志".tl : "未找到当前版本的发布记录 (可能是测试版)".tl);
   showMiuixDialog<void>(
     context: context,
     title: "更新日志".tl,
-    summary: version == null ? null : "v$version",
+    summary: "${"当前版本".tl} $tag",
     contentBuilder: (context, close) {
       final colors = MiuixTheme.of(context).colors;
       var maxH = MediaQuery.of(context).size.height * 0.55;
@@ -59,7 +63,9 @@ Future<void> showLatestChangelog(BuildContext context) async {
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               child: notes == null
-                  ? Text("暂无更新日志, 点击在 GitHub 查看".tl)
+                  ? Text(fallbackText,
+                      style: TextStyle(
+                          fontSize: 14, color: colors.onSurfaceVariantSummary))
                   : SimpleMarkdown(notes),
             ),
           ),
@@ -75,7 +81,10 @@ Future<void> showLatestChangelog(BuildContext context) async {
                   close();
                   launchUrlString(url, mode: LaunchMode.externalApplication);
                 },
-                child: Text("在 GitHub 查看".tl),
+                child: const FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text("GitHub", maxLines: 1),
+                ),
               ),
             ),
           ]),
@@ -160,39 +169,22 @@ void setProxy(BuildContext context) {
       });
 }
 
-void setDownloadFolder() async {
+Future<void> setDownloadFolder() async {
   if (DownloadManager().downloading.isNotEmpty) {
-    showToast(message: "请在下载任务完成后进行操作".tl);
+    showToast(message: "请先完成下载任务".tl);
     return;
   }
 
-  if (App.isAndroid) {
-    var directories = await getExternalStorageDirectories();
-    var paths = List<String>.generate(
-        directories?.length ?? 0, (index) => directories?[index].path ?? "");
-    var havePermission = await const MethodChannel("pica_comic/settings")
-        .invokeMethod("files_check");
-    showMiuixDialog(
-        context: App.globalContext!,
-        title: "设置下载目录".tl,
-        contentBuilder: (context, close) => SetDownloadFolderDialog(
-              paths: paths,
-              haveManageFilesPermission: havePermission,
-            ));
-  } else {
-    showMiuixDialog(
-        context: App.globalContext!,
-        title: "设置下载目录".tl,
-        contentBuilder: (context, close) => const SetDownloadFolderDialog());
-  }
+  if (App.globalContext == null) return;
+  await showMiuixDialog(
+    context: App.globalContext!,
+    title: "漫画下载目录".tl,
+    contentBuilder: (context, close) => const SetDownloadFolderDialog(),
+  );
 }
 
 class SetDownloadFolderDialog extends StatefulWidget {
-  const SetDownloadFolderDialog(
-      {this.paths, this.haveManageFilesPermission = false, Key? key})
-      : super(key: key);
-  final List<String>? paths;
-  final bool haveManageFilesPermission;
+  const SetDownloadFolderDialog({super.key});
 
   @override
   State<SetDownloadFolderDialog> createState() =>
@@ -200,195 +192,183 @@ class SetDownloadFolderDialog extends StatefulWidget {
 }
 
 class _SetDownloadFolderDialogState extends State<SetDownloadFolderDialog> {
-  final controller = TextEditingController();
-  String current = appdata.settings[22];
+  late String current;
   bool transform = true;
+  bool busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    current = appdata.settings[22];
+  }
+
+  bool get _isDefault => current.trim().isEmpty;
+
+  Future<void> _pickFolder() async {
+    if (busy) return;
+    final picked = await pickStorageDirectory();
+    if (picked == null) return;
+    if (picked.path == null || picked.path!.trim().isEmpty) {
+      showToast(message: "请选择内部存储目录".tl);
+      return;
+    }
+    setState(() => current = picked.path!.trim());
+  }
+
+  Future<bool> _ensureWritable(String path) async {
+    if (!App.isAndroid) return true;
+    if (!_needsManageStorageForPath(path)) return true;
+    final have = await const MethodChannel("pica_comic/settings")
+            .invokeMethod("files_check") ==
+        true;
+    if (have) return true;
+    showToast(message: "需要所有文件访问权限".tl);
+    await const MethodChannel("pica_comic/settings").invokeMethod("files");
+    return false;
+  }
+
+  void _reset() {
+    if (busy) return;
+    setState(() => current = "");
+  }
+
+  Future<void> _apply() async {
+    if (busy) return;
+    final next = current.trim();
+    if (next == appdata.settings[22].trim()) {
+      App.globalBack();
+      return;
+    }
+    if (next.isNotEmpty) {
+      final ok = await _ensureWritable(next);
+      if (!ok) return;
+      try {
+        final dir = Directory(next);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+      } catch (e) {
+        showToast(message: "${"目录不可用".tl}: $e");
+        return;
+      }
+    }
+    setState(() => busy = true);
+    final oldPath = appdata.settings[22];
+    appdata.settings[22] = next;
+    if (transform) {
+      showToast(message: "正在复制文件".tl);
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    final res =
+        await downloadManager.updatePath(next, transform: transform);
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (res == "ok") {
+      await appdata.updateSettings();
+      App.globalBack();
+      showToast(message: "已更新".tl);
+    } else {
+      appdata.settings[22] = oldPath;
+      showToast(message: res);
+    }
+  }
+
+  Widget _optionCard({
+    required bool selected,
+    required String title,
+    required String summary,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
+      child: MiuixCard(
+        cornerRadius: 16,
+        insideMargin: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        feedbackType: MiuixPressFeedbackType.sink,
+        colors: selected
+            ? MiuixCardColors(
+                color: scheme.primaryContainer,
+                contentColor: scheme.onPrimaryContainer,
+              )
+            : null,
+        onPressed: busy ? null : onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              summary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (App.isDesktop || widget.haveManageFilesPermission)
-          SizedBox(
-            width: 400,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: MiuixTextField(
-                    controller: controller,
-                    label: "路径".tl,
-                    singleLine: true,
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: MiuixCheckboxPreference(
-                    value: transform,
-                    onChanged: (b) => setState(() {
-                      transform = b;
-                    }),
-                    title: "转移数据".tl,
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      MiuixIcon(vector: MiuixIcons.os4.info, size: 18),
-                      const SizedBox(
-                        width: 4,
-                      ),
-                      Expanded(
-                        child: SizedBox(
-                          child: Text("如需还原之前的下载, 将路径填写为下载数据的位置, 并取消勾选转移数据".tl),
-                        ),
-                      )
-                    ],
-                  ),
-                ),
-                Center(
-                  child: MiuixButton(colors: MiuixButtonDefaults.buttonColorsPrimary(context), 
-                    onPressed: () async {
-                      if (controller.text == appdata.settings[22]) return;
-                      var directory = Directory(controller.text);
-                      if (directory.existsSync() || controller.text == "") {
-                        var oldPath = appdata.settings[22];
-                        appdata.settings[22] = controller.text;
-                        if (transform) {
-                          showToast(message: "正在复制文件".tl);
-                          await Future.delayed(
-                              const Duration(milliseconds: 200));
-                        }
-                        var res = await downloadManager
-                            .updatePath(controller.text, transform: transform);
-                        if (res == "ok") {
-                          hideAllMessages();
-                          if (context.mounted) {
-                            context.pop();
-                          }
-                          showToast(message: "更新成功".tl);
-                          appdata.updateSettings();
-                        } else {
-                          appdata.settings[22] = oldPath;
-                          showToast(message: res);
-                        }
-                      } else {
-                        showToast(message: "目录不存在".tl);
-                      }
-                    },
-                    child: Text("提交".tl),
-                  ),
-                ),
-                const SizedBox(
-                  height: 8,
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                  child: Text("${"现在的路径为".tl}: ${DownloadManager().path}"),
-                )
-              ],
+        _optionCard(
+          selected: _isDefault,
+          title: "默认".tl,
+          summary: "应用私有".tl,
+          onTap: () => setState(() => current = ""),
+        ),
+        _optionCard(
+          selected: !_isDefault,
+          title: "自定义".tl,
+          summary: _isDefault
+              ? "选择文件夹".tl
+              : friendlyStoragePath(current),
+          onTap: _pickFolder,
+        ),
+        MiuixCheckboxPreference(
+          value: transform,
+          onChanged: busy
+              ? null
+              : (b) => setState(() {
+                    transform = b;
+                  }),
+          title: "转移数据".tl,
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: MiuixTextButton(
+                "重置".tl,
+                onPressed: busy ? null : _reset,
+              ),
             ),
-          )
-        else
-          SizedBox(
-            width: 400,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                MiuixRadioButtonPreference(
-                    title: "App数据目录".tl,
-                    selected: current == "",
-                    onClick: () => setState(() {
-                          current = "";
-                        })),
-                for (int i = 0; i < widget.paths!.length; i++)
-                  MiuixRadioButtonPreference(
-                      title: widget.paths![i],
-                      selected: current == widget.paths![i],
-                      onClick: () => setState(() {
-                            current = widget.paths![i];
-                          })),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: MiuixBasicComponent(
-                    title: "允许储存权限".tl,
-                    summary: "需要储存权限以选取任意目录".tl,
-                    onClick: () {
-                      const MethodChannel("pica_comic/settings")
-                          .invokeMethod("files");
-                      App.globalBack();
-                    },
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: MiuixCheckboxPreference(
-                    value: transform,
-                    onChanged: (b) => setState(() {
-                      transform = b;
-                    }),
-                    title: "转移数据".tl,
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      MiuixIcon(vector: MiuixIcons.os4.info, size: 18),
-                      const SizedBox(
-                        width: 2,
-                      ),
-                      Expanded(
-                        child: SizedBox(
-                          child: Text("如需还原之前的下载, 将路径填写为下载数据的位置, 并取消勾选转移数据".tl),
-                        ),
-                      )
-                    ],
-                  ),
-                ),
-                SizedBox(
-                  height: 60,
-                  child: Center(
-                    child: MiuixButton(colors: MiuixButtonDefaults.buttonColorsPrimary(context), 
-                      child: Text("确认".tl),
-                      onPressed: () async {
-                        if (appdata.settings[22] != current) {
-                          var oldPath = appdata.settings[22];
-                          appdata.settings[22] = current;
-                          if (transform) {
-                            showToast(message: "正在复制文件".tl);
-                            await Future.delayed(
-                                const Duration(milliseconds: 200));
-                          }
-                          var res = await downloadManager.updatePath(current,
-                              transform: transform);
-                          if (res == "ok") {
-                            App.globalBack();
-                            showToast(message: "更新成功".tl);
-                            appdata.updateSettings();
-                          } else {
-                            appdata.settings[22] = oldPath;
-                            showToast(message: res);
-                          }
-                        } else {
-                          App.globalBack();
-                        }
-                      },
-                    ),
-                  ),
-                ),
-              ],
+            const SizedBox(width: 12),
+            Expanded(
+              child: MiuixButton(
+                colors: MiuixButtonDefaults.buttonColorsPrimary(context),
+                onPressed: busy ? null : _apply,
+                child: Text(busy ? "处理中".tl : "确认".tl),
+              ),
             ),
-          )
+          ],
+        ),
       ],
     );
   }
 }
+
 
 void setExplorePages(BuildContext context) {
   showPopUpWidget(context, const SetExplorePages());
@@ -838,4 +818,267 @@ void setCacheLimit() {
       },
     ),
   );
+}
+
+
+String downloadFolderSummary() {
+  final custom = appdata.settings[22].trim();
+  if (custom.isEmpty) {
+    return "默认（应用私有）".tl;
+  }
+  return friendlyStoragePath(custom);
+}
+
+String imageSaveFolderSummary() {
+  final custom = appdata.settings[93].trim();
+  if (custom.isEmpty) {
+    return "默认（系统相册）".tl;
+  }
+  return friendlyStoragePath(custom);
+}
+
+bool _isAppPrivateStoragePath(String path) {
+  final p = path.replaceAll('\\', '/').toLowerCase();
+  return p.contains('/data/user/') ||
+      p.contains('/data/data/') ||
+      p.contains('/android/data/');
+}
+
+bool _needsManageStorageForPath(String path) {
+  if (!App.isAndroid) return false;
+  return !_isAppPrivateStoragePath(path);
+}
+
+/// 设置页展示用：不泄露应用私有真实路径；自定义目录尽量显示相对内部存储的可读路径。
+String friendlyStoragePath(String path) {
+  var p = path.trim().replaceAll('\\', '/');
+  if (p.isEmpty) return "";
+  if (_isAppPrivateStoragePath(p)) {
+    return "应用私有".tl;
+  }
+  const prefixes = <String>[
+    '/storage/emulated/0/',
+    '/sdcard/',
+    'storage/emulated/0/',
+  ];
+  for (final prefix in prefixes) {
+    if (p.toLowerCase().startsWith(prefix)) {
+      return p.substring(prefix.length);
+    }
+  }
+  if (p.startsWith('content://')) {
+    final decoded = Uri.decodeComponent(p);
+    final marker = decoded.contains('%3A') ? '%3A' : ':';
+    final idx = decoded.lastIndexOf(marker);
+    if (idx >= 0 && idx + marker.length < decoded.length) {
+      return decoded.substring(idx + marker.length).replaceAll('+', '/');
+    }
+    final segs = decoded.split('/');
+    return segs.isNotEmpty ? segs.last : "已选目录".tl;
+  }
+  return p;
+}
+
+class DirectoryPickResult {
+  const DirectoryPickResult({this.path, this.uri, this.displayName});
+  final String? path;
+  final String? uri;
+  final String? displayName;
+}
+
+/// Android：系统文件管理器选目录并持久化 URI 权限；桌面：原生文件夹选择。
+Future<DirectoryPickResult?> pickStorageDirectory() async {
+  if (App.isAndroid) {
+    try {
+      final raw = await const MethodChannel("pica_comic/settings")
+          .invokeMethod("pick_directory");
+      if (raw == null) return null;
+      final map = Map<String, dynamic>.from(raw as Map);
+      final path = (map['path'] as String?)?.trim();
+      final uri = map['uri'] as String?;
+      final displayName = map['displayName'] as String?;
+      return DirectoryPickResult(
+        path: (path != null && path.isNotEmpty) ? path : null,
+        uri: uri,
+        displayName: displayName,
+      );
+    } catch (e) {
+      showToast(message: "${"选择失败".tl}: $e");
+      return null;
+    }
+  }
+  final path = await getDirectoryPath();
+  if (path == null || path.trim().isEmpty) return null;
+  final cleaned = path.trim();
+  final name = cleaned.replaceAll('\\', '/').split('/').last;
+  return DirectoryPickResult(path: cleaned, displayName: name);
+}
+
+Future<void> setImageSaveFolder() async {
+  if (App.globalContext == null) return;
+  await showMiuixDialog(
+    context: App.globalContext!,
+    title: "图片保存目录".tl,
+    contentBuilder: (context, close) => const SetImageSaveFolderDialog(),
+  );
+}
+
+class SetImageSaveFolderDialog extends StatefulWidget {
+  const SetImageSaveFolderDialog({super.key});
+
+  @override
+  State<SetImageSaveFolderDialog> createState() =>
+      _SetImageSaveFolderDialogState();
+}
+
+class _SetImageSaveFolderDialogState extends State<SetImageSaveFolderDialog> {
+  late String current;
+  bool busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    current = appdata.settings[93];
+  }
+
+  bool get _isDefault => current.trim().isEmpty;
+
+  Future<void> _pickFolder() async {
+    if (busy) return;
+    final picked = await pickStorageDirectory();
+    if (picked == null) return;
+    if (picked.path == null || picked.path!.trim().isEmpty) {
+      showToast(message: "请选择内部存储目录".tl);
+      return;
+    }
+    setState(() => current = picked.path!.trim());
+  }
+
+  Future<bool> _ensureWritable(String path) async {
+    if (!App.isAndroid) return true;
+    if (!_needsManageStorageForPath(path)) return true;
+    final have = await const MethodChannel("pica_comic/settings")
+            .invokeMethod("files_check") ==
+        true;
+    if (have) return true;
+    showToast(message: "需要所有文件访问权限".tl);
+    await const MethodChannel("pica_comic/settings").invokeMethod("files");
+    return false;
+  }
+
+  void _reset() {
+    if (busy) return;
+    setState(() => current = "");
+  }
+
+  Future<void> _confirm() async {
+    if (busy) return;
+    final path = current.trim();
+    if (path.isNotEmpty) {
+      final ok = await _ensureWritable(path);
+      if (!ok) return;
+      try {
+        final dir = Directory(path);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+      } catch (e) {
+        showToast(message: "${"目录不可用".tl}: $e");
+        return;
+      }
+    }
+    setState(() => busy = true);
+    appdata.settings[93] = path;
+    await appdata.updateSettings();
+    if (!mounted) return;
+    setState(() => busy = false);
+    App.globalBack();
+    showToast(message: "已更新".tl);
+  }
+
+  Widget _optionCard({
+    required bool selected,
+    required String title,
+    required String summary,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
+      child: MiuixCard(
+        cornerRadius: 16,
+        insideMargin: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        feedbackType: MiuixPressFeedbackType.sink,
+        colors: selected
+            ? MiuixCardColors(
+                color: scheme.primaryContainer,
+                contentColor: scheme.onPrimaryContainer,
+              )
+            : null,
+        onPressed: busy ? null : onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              summary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _optionCard(
+          selected: _isDefault,
+          title: "默认".tl,
+          summary: "系统相册".tl,
+          onTap: () => setState(() => current = ""),
+        ),
+        _optionCard(
+          selected: !_isDefault,
+          title: "自定义".tl,
+          summary: _isDefault
+              ? "选择文件夹".tl
+              : friendlyStoragePath(current),
+          onTap: _pickFolder,
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: MiuixTextButton(
+                "重置".tl,
+                onPressed: busy ? null : _reset,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MiuixButton(
+                colors: MiuixButtonDefaults.buttonColorsPrimary(context),
+                onPressed: busy ? null : _confirm,
+                child: Text(busy ? "处理中".tl : "确认".tl),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }

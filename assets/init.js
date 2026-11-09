@@ -453,7 +453,7 @@ class HtmlDocument {
             key: this.key,
             query: query
         })
-        if(!k) return null;
+        if (k === null || k === undefined) return null;
         return new HtmlElement(k);
     }
 
@@ -523,7 +523,7 @@ class HtmlElement {
             key: this.key,
             query: query
         })
-        if(!k) return null;
+        if (k === null || k === undefined) return null;
         return new HtmlElement(k);
     }
 

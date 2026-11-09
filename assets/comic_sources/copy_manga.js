@@ -7,7 +7,7 @@ class CopyManga extends ComicSource {
 
     key = "copy_manga"
 
-    version = "3.2.4"
+    version = "3.2.5"
 
     minAppVersion = "4.0.0"
 
@@ -450,6 +450,22 @@ favorites_ordering: {
         }
     }
 
+
+    async loadEpWithRetry(comicId, epId) {
+        let lastError = null
+        for (let i = 0; i < 3; i++) {
+            try {
+                return await this.comic._loadEpOnce(comicId, epId)
+            } catch (e) {
+                // Login-required should not be retried away
+                if (String(e).includes("登录") || String(e).includes("登")) throw e
+                lastError = e
+                await new Promise(r => setTimeout(r, 500 * (i + 1)))
+            }
+        }
+        throw lastError
+    }
+
     comic = {
         loadInfo: async (id) => {
             let rid = await this.requestId()
@@ -487,7 +503,8 @@ favorites_ordering: {
                 thumbnails: await this.previewImages(id, chapters)
             }
         },
-        loadEp: async (comicId, epId) => {
+        loadEp: async (comicId, epId) => this.loadEpWithRetry(comicId, epId),
+        _loadEpOnce: async (comicId, epId) => {
             let rid = await this.requestId()
             let r
             try {
@@ -500,10 +517,20 @@ favorites_ordering: {
             let ch = r.chapter
             let q = this.loadSetting("image_quality") || "1500"
             let urls = ch.contents.map(e => e.url.replace(/([./])c\d+x\.[a-zA-Z]+$/, `$1c${q}x.webp`))
-            // words 给出每张图在章节中的实际位置
+            // words 给出每张图在章节中的实际位置；有空洞/越界则回退原序
             let images = urls.slice()
             if (Array.isArray(ch.words) && ch.words.length === urls.length) {
-                for (let i = 0; i < urls.length; i++) images[ch.words[i]] = urls[i]
+                let reordered = new Array(urls.length)
+                let valid = true
+                for (let i = 0; i < urls.length; i++) {
+                    let w = ch.words[i]
+                    if (typeof w !== "number" || w < 0 || w >= urls.length || reordered[w] != null) {
+                        valid = false
+                        break
+                    }
+                    reordered[w] = urls[i]
+                }
+                if (valid && reordered.every(x => x != null)) images = reordered
             }
             return { images: images }
         },

@@ -58,6 +58,9 @@ class ComicReadingPageLogic extends StateController {
 
   List<bool> requestedLoadingItems = [];
 
+  /// 正在加载的章节, 防止重建时重复请求
+  int? loadingOrder;
+
   bool haveUsedInitialPage = false;
 
   /// 双页模式下是否在第一页时显示单页
@@ -89,9 +92,16 @@ class ComicReadingPageLogic extends StateController {
         PageController(initialPage: _getPage(initialPage));
     _index = _getIndex(initialPage);
     order <= 0 ? order = 1 : order;
+    _attachContinuousIndexListener();
+  }
+
+  void _attachContinuousIndexListener() {
     itemScrollListener.itemPositions.addListener(() {
-      var newIndex = itemScrollListener.itemPositions.value.first.index + 1;
-      if(newIndex != index) {
+      final positions = itemScrollListener.itemPositions.value;
+      if (positions.isEmpty) return;
+      // Use the topmost (min) visible index; .first can jump when multiple pages are on screen.
+      var newIndex = positions.map((e) => e.index).reduce(math.min) + 1;
+      if (newIndex != index) {
         index = newIndex;
         update(["ToolBar"]);
       }
@@ -137,12 +147,25 @@ class ComicReadingPageLogic extends StateController {
   int get index => _index;
 
   ///当前的页面, 0和最后一个为空白页, 用于进行章节跳转
+  Timer? _historyWriteTimer;
+
+  void flushHistory() {
+    _historyWriteTimer?.cancel();
+    _historyWriteTimer = null;
+    updateHistory();
+  }
+
   set index(int value) {
     _index = value;
     for (var element in _indexChangeCallbacks) {
       element(value);
     }
-    updateHistory();
+    // Debounce DB writes while flipping pages.
+    _historyWriteTimer?.cancel();
+    _historyWriteTimer = Timer(const Duration(milliseconds: 800), () {
+      _historyWriteTimer = null;
+      updateHistory();
+    });
   }
 
   final _indexChangeCallbacks = <void Function(int)>[];
@@ -319,6 +342,7 @@ class ComicReadingPageLogic extends StateController {
     pageController = PageController(initialPage: 1);
     itemScrollController = ItemScrollController();
     itemScrollListener = ItemPositionsListener.create();
+    _attachContinuousIndexListener();
     scrollController = ScrollController(keepScrollOffset: true);
     clearPhotoViewControllers();
     noScroll = false;

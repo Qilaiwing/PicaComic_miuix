@@ -51,7 +51,7 @@ class Appdata {
     "0", //19 Jm搜索漫画排序模式, 值为 ComicsOrder 的索引
     "0", //20 Eh画廊站点, 1表示e-hentai, 2表示exhentai
     "111111", //21 启用的漫画源
-    "", //22 下载目录, 仅Windows端, 为空表示使用App数据目录
+    "", //22 漫画下载目录, 空=应用私有 …/download；Android/桌面均可自定义
     "0", //23 初始页面,
     "1111111111", //24 [废弃]分类页面
     "0", //25 漫画列表显示模式
@@ -122,6 +122,7 @@ class Appdata {
     "1", //90 [unused]
     "1.0", //91 comic tile scale
     "1", //92 毛玻璃效果
+    "", //93 图片保存目录, 空=系统相册/SAF；非空则直接写入该目录
   ];
 
   /// 隐式数据, 用于存储一些不需要用户设置的数据, 此数据通常为某些组件的状态, 此设置不应当被同步
@@ -270,11 +271,13 @@ class Appdata {
     try {
       var newSettings = List<String>.from(json["settings"]);
       var downloadPath = settings[22];
+      var imageSavePath = settings[93];
       var authRequired = settings[13];
       for (var i = 0; i < settings.length && i < newSettings.length; i++) {
         settings[i] = newSettings[i];
       }
       settings[22] = downloadPath;
+      settings[93] = imageSavePath;
       settings[13] = authRequired;
       migrateComicTileSettings();
       var newFirstUse = List<String>.from(json["firstUse"]);

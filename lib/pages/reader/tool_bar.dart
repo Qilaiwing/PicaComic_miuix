@@ -173,57 +173,81 @@ extension ToolBar on ComicReadingPage {
                                   vector: MiuixIcons.extended.byName('favorites') ??
                                       MiuixIcons.os4.favorites,
                                   size: 19,
+                                  tint: ImageFavoriteManager.exist(
+                                          "${logic.data.sourceKey}-${logic.data.id}",
+                                          logic.order,
+                                          logic.index)
+                                      ? primaryColor
+                                      : null,
                                 ),
                                 onPressed: () async {
                                   try {
                                     final id =
                                         "${logic.data.sourceKey}-${logic.data.id}";
-                                    var image = await _persistentCurrentImage();
-                                    if (image != null) {
-                                      image = image.split("/").last;
-                                      var otherInfo = <String, dynamic>{};
-                                      if (logic.data.type == ReadingType.ehentai) {
-                                        otherInfo["gallery"] =
-                                            (logic.data as EhReadingData)
-                                                .gallery
-                                                .toJson();
-                                      } else if (logic.data.type ==
-                                          ReadingType.hitomi) {
-                                        otherInfo["hitomi"] =
-                                            (readingData as HitomiReadingData)
-                                                .images
-                                                .map((e) => e.toMap())
-                                                .toList();
-                                        otherInfo["galleryId"] = readingData.id;
-                                      } else if (logic.data.type == ReadingType.jm) {
-                                        otherInfo["jmEpNames"] =
-                                            readingData.eps!.values.toList();
-                                        otherInfo["epsId"] = readingData.eps!.keys
-                                            .elementAt(logic.order - 1);
-                                        otherInfo["bookId"] = readingData.id;
-                                      }
-                                      if (logic.data.type != ComicType.other) {
-                                        otherInfo["eps"] =
-                                            readingData.eps?.keys.toList() ?? [];
-                                      } else {
-                                        otherInfo["eps"] = readingData.eps;
-                                      }
-                                      otherInfo["url"] = logic.urls[logic.index - 1];
-                                      var favorite = ImageFavorite(
-                                          id,
-                                          image,
-                                          readingData.title,
-                                          logic.order,
-                                          logic.index,
-                                          otherInfo);
-                                      if (!ImageFavoriteManager.exist(id, logic.order, logic.index)) {
-                                        ImageFavoriteManager.add(favorite);
-                                        showToast(message: "已添加至图片收藏".tl);
-                                      } else {
-                                        ImageFavoriteManager.delete(favorite);
-                                        showToast(message: "已取消图片收藏".tl);
-                                      }
+                                    int? pageIndex = logic.index - 1;
+                                    if (logic.readingMethod ==
+                                        ReadingMethod.topToBottomContinuously) {
+                                      pageIndex =
+                                          await selectImage(forFavorite: true);
                                     }
+                                    if (pageIndex == null) {
+                                      return;
+                                    }
+                                    final page = pageIndex + 1;
+                                    var file = await _getFileFromStream(
+                                        readingData.loadImage(logic.order,
+                                            pageIndex, logic.urls[pageIndex]));
+                                    var imagePath =
+                                        await persistentCurrentImage(file);
+                                    imagePath = imagePath
+                                        .split(RegExp(r'[/\\]'))
+                                        .last;
+                                    var otherInfo = <String, dynamic>{};
+                                    if (logic.data.type == ReadingType.ehentai) {
+                                      otherInfo["gallery"] =
+                                          (logic.data as EhReadingData)
+                                              .gallery
+                                              .toJson();
+                                    } else if (logic.data.type ==
+                                        ReadingType.hitomi) {
+                                      otherInfo["hitomi"] =
+                                          (readingData as HitomiReadingData)
+                                              .images
+                                              .map((e) => e.toMap())
+                                              .toList();
+                                      otherInfo["galleryId"] = readingData.id;
+                                    } else if (logic.data.type ==
+                                        ReadingType.jm) {
+                                      otherInfo["jmEpNames"] =
+                                          readingData.eps!.values.toList();
+                                      otherInfo["epsId"] = readingData
+                                          .eps!.keys
+                                          .elementAt(logic.order - 1);
+                                      otherInfo["bookId"] = readingData.id;
+                                    }
+                                    if (logic.data.type != ComicType.other) {
+                                      otherInfo["eps"] =
+                                          readingData.eps?.keys.toList() ?? [];
+                                    } else {
+                                      otherInfo["eps"] = readingData.eps;
+                                    }
+                                    otherInfo["url"] = logic.urls[pageIndex];
+                                    var favorite = ImageFavorite(
+                                        id,
+                                        imagePath,
+                                        readingData.title,
+                                        logic.order,
+                                        page,
+                                        otherInfo);
+                                    if (!ImageFavoriteManager.exist(
+                                        id, logic.order, page)) {
+                                      ImageFavoriteManager.add(favorite);
+                                      showToast(message: "已添加至图片收藏".tl);
+                                    } else {
+                                      ImageFavoriteManager.delete(favorite);
+                                      showToast(message: "已取消图片收藏".tl);
+                                    }
+                                    logic.update(["ToolBar"]);
                                   } catch (e) {
                                     showToast(message: e.toString());
                                   }

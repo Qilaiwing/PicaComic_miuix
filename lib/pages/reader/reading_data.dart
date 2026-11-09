@@ -283,7 +283,7 @@ class HtReadingData extends ReadingData {
   bool get hasEp => false;
 
   @override
-  String get sourceKey => "htManga";
+  String get sourceKey => "htmanga";
 
   @override
   ComicType get type => ComicType.htManga;

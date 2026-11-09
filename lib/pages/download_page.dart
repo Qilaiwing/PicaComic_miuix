@@ -1251,7 +1251,9 @@ child: MiuixPressable(
             child: FrostBlur(
               child: Container(
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xF01C1C1E) : const Color(0xF4F6F6F8),
+                  color: isDark
+                      ? Color(frostEnabled ? 0xF01C1C1E : 0xFF1C1C1E)
+                      : Color(frostEnabled ? 0xF4F6F6F8 : 0xFFF6F6F8),
                 ),
                 child: content,
               ),

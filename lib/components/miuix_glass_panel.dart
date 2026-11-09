@@ -123,7 +123,7 @@ class _MiuixGlassPanelState extends State<MiuixGlassPanel> {
                 color: (widget.tint ?? Colors.transparent).withValues(
                   alpha: (frostEnabled || widget.tint == null
                           ? (widget.tint?.a ?? 0.0)
-                          : math.max(widget.tint!.a, 0.94)) *
+                          : 1.0) *
                       t,
                 ),
                 shape: shape,

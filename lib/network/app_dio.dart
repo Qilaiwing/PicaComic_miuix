@@ -18,14 +18,13 @@ class MyLogInterceptor implements Interceptor {
       case DioExceptionType.badResponse:
         var statusCode = err.response?.statusCode;
         if(statusCode != null){
-          err = err.copyWith(message: "Invalid Status Code: $statusCode. "
+          err = err.copyWith(message: "状态码 $statusCode："
               "${_getStatusCodeInfo(statusCode)}");
         }
       case DioExceptionType.connectionTimeout:
-        err = err.copyWith(message: "Connection Timeout");
+        err = err.copyWith(message: "连接超时");
       case DioExceptionType.receiveTimeout:
-        err = err.copyWith(message: "Receive Timeout: "
-            "This indicates that the server is too busy to respond");
+        err = err.copyWith(message: "接收超时：服务器繁忙，请稍后重试");
       case DioExceptionType.unknown:
         if(err.toString().contains("Connection terminated during handshake")) {
           err = err.copyWith(message: "Connection terminated during handshake: "
@@ -41,17 +40,16 @@ class MyLogInterceptor implements Interceptor {
   }
 
   static const errorMessages = <int, String>{
-    400: "The Request is invalid.",
-    401: "The Request is unauthorized.",
-    403: "No permission to access the resource. Check your account or network.",
-    404: "Not found.",
-    429: "Too many requests. Please try again later.",
+    400: "请求无效",
+    401: "未授权，请重新登录",
+    403: "无权限访问，请检查账号或网络",
+    404: "资源不存在",
+    429: "请求过于频繁，请稍后重试",
   };
 
   String _getStatusCodeInfo(int? statusCode){
     if(statusCode != null && statusCode >= 500) {
-      return "This is server-side error, please try again later. "
-          "Do not report this issue.";
+      return "服务器错误，请稍后重试";
     } else {
       return errorMessages[statusCode] ?? "";
     }
@@ -145,13 +143,27 @@ class AppHttpAdapter implements HttpClientAdapter{
             }
           }
         }
+        final errStr = e.toString();
+        final isHandshake = errStr.contains("Connection terminated during handshake")
+            || errStr.contains("HandshakeException")
+            || errStr.contains("Connection reset by peer");
         LogManager.addLog(LogLevel.error, "Network",
             "${o.method} ${o.path}\n$e\nRetrying...");
         retry++;
-        if(retry == 2){
+        // Handshake / reset: recreate client and allow one extra attempt with backoff.
+        final maxAttempts = isHandshake ? 3 : 2;
+        if(retry >= maxAttempts){
           rethrow;
         }
-        await Future.delayed(const Duration(seconds: 1));
+        if (isHandshake) {
+          try {
+            adapter?.close(force: true);
+          } catch (_) {}
+          adapter = await createAdapter(http2);
+          await Future.delayed(Duration(milliseconds: 400 * retry));
+        } else {
+          await Future.delayed(const Duration(seconds: 1));
+        }
       }
     }
   }

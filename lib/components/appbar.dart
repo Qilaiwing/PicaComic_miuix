@@ -130,14 +130,16 @@ class _AppbarState extends State<Appbar> {
       ),
     ).paddingTop(context.padding.top);
     if (widget.backgroundColor != Colors.transparent) {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
       final baseColor =
           widget.backgroundColor ?? MiuixTheme.of(context).colors.background;
-      final translucentColor = baseColor.withValues(alpha: frostTintAlpha(context));
+      final barColor = baseColor.withValues(alpha: frostTintAlpha(context));
+      if (!frostEnabled) {
+        return ColoredBox(color: barColor, child: content);
+      }
       return ClipRect(
         child: FrostBlur(
           child: ColoredBox(
-            color: translucentColor,
+            color: barColor,
             child: content,
           ),
         ),
@@ -274,10 +276,7 @@ class _MySliverAppBarDelegate extends SliverPersistentHeaderDelegate {
     final bgColor = baseColor.withValues(alpha: frostTintAlpha(context));
     final fg = isDark ? Colors.white : const Color(0xFF111111);
 
-    return SizedBox.expand(
-      child: ClipRect(
-        child: FrostBlur(
-          child: Container(
+    Widget barBody = Container(
             color: bgColor,
             child: Stack(
               children: [
@@ -419,8 +418,13 @@ class _MySliverAppBarDelegate extends SliverPersistentHeaderDelegate {
                   ),
               ],
             ),
-          ),
-        ),
+    );
+    if (!frostEnabled) {
+      return SizedBox.expand(child: barBody);
+    }
+    return SizedBox.expand(
+      child: ClipRect(
+        child: FrostBlur(child: barBody),
       ),
     );
   }

@@ -56,6 +56,27 @@ class ImageFavoriteManager{
       where id = ? and ep = ? and page = ?;
     """, [favorite.id, favorite.ep, favorite.page]);
     Webdav.uploadData();
+    Future.microtask(() => StateController.findOrNull(tag: "me_page")?.update());
+  }
+
+  static void deleteMany(Iterable<ImageFavorite> favorites){
+    for (var favorite in favorites) {
+      _db.execute("""
+      delete from image_favorites
+      where id = ? and ep = ? and page = ?;
+    """, [favorite.id, favorite.ep, favorite.page]);
+    }
+    Webdav.uploadData();
+    Future.microtask(() => StateController.findOrNull(tag: "me_page")?.update());
+  }
+
+  /// 某话已收藏的页码集合（1-based page）
+  static Set<int> favoritedPages(String id, int ep) {
+    var res = _db.select("""
+      select page from image_favorites
+      where id = ? and ep = ?;
+    """, [id, ep]);
+    return res.map((e) => e["page"] as int).toSet();
   }
 
   static bool exist(String id, int ep, int page) {

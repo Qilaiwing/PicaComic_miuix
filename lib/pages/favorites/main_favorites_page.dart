@@ -113,18 +113,9 @@ class FavoritesPage extends StatelessWidget with _LocalFavoritesManager {
     return Stack(
       children: [
         Positioned.fill(
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 200),
-            layoutBuilder: (currentChild, previousChildren) {
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  ...previousChildren,
-                  if (currentChild != null) currentChild,
-                ],
-              );
-            },
-            child: isViewingComics
+          // Instant swap: AnimatedSwitcher cross-fade stacked folder list
+          // and comic grid for 200ms and looked like a flash when going back.
+          child: isViewingComics
                 ? KeyedSubtree(
                     key: ValueKey('content_${controller.current}'),
                     child: buildContent(context),
@@ -133,7 +124,6 @@ class FavoritesPage extends StatelessWidget with _LocalFavoritesManager {
                     key: const ValueKey('folders_list'),
                     child: buildFoldersList(context),
                   ),
-          ),
         ),
         if (controller.isSelectingComics)
           Positioned(
@@ -690,9 +680,11 @@ class FavoritesPage extends StatelessWidget with _LocalFavoritesManager {
     if (controller.current == null) {
       return const SizedBox();
     } else if (controller.isNetwork!) {
-      return TopInsetPadding(
+      // ComicsPage / multi-folder list apply MainTopInset themselves; wrapping
+      // again here doubles the gap under the top bar (esp. PicACG flat list).
+      return NetworkFavoritePage(
+        controller.networkData!,
         key: Key(controller.current ?? ""),
-        child: NetworkFavoritePage(controller.networkData!),
       );
     } else {
       var count = LocalFavoritesManager().count(controller.current!);

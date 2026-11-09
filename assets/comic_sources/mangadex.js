@@ -4,7 +4,7 @@ class MangaDex extends ComicSource {
 
     key = "mangadex"
 
-    version = "1.2.8"
+    version = "1.2.9"
 
     minAppVersion = "4.0.0"
 
@@ -91,12 +91,14 @@ title_language: {
                 if (res.status === 200) return JSON.parse(res.body)
                 if (res.status === 429) {
                     lastError = "请求过于频繁，请稍后再试"
+                    await new Promise(r => setTimeout(r, 1000 * (i + 1)))
                     continue
                 }
                 lastError = "Invalid status code: " + res.status
             } catch (e) {
                 lastError = e
             }
+            if (i < 1) await new Promise(r => setTimeout(r, 400 * (i + 1)))
         }
         throw lastError
     }

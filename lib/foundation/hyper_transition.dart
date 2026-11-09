@@ -3,8 +3,7 @@ part of 'app_page_route.dart';
 /// HyperOS-like page transition: the new page slides in from the right with
 /// an emphasized-decelerate curve and a slight fade, while the page below
 /// moves left with parallax and dims a little. During a user gesture (iOS
-/// edge swipe or Android predictive back) the animation follows the finger
-/// linearly.
+/// edge swipe) the animation follows the finger linearly.
 class HyperPageTransition extends StatelessWidget {
   const HyperPageTransition({
     super.key,
@@ -74,71 +73,4 @@ class HyperPageTransition extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Android 14+ predictive back: feeds the system back-gesture progress into
-/// the route's own controller (same contract as Flutter's
-/// PredictiveBackPageTransitionsBuilder), so [HyperPageTransition] tracks the
-/// gesture and the previous page is revealed live.
-class _PredictiveBackDetector extends StatefulWidget {
-  const _PredictiveBackDetector({required this.route, required this.child});
-
-  final PageRoute<dynamic> route;
-  final Widget child;
-
-  @override
-  State<_PredictiveBackDetector> createState() =>
-      _PredictiveBackDetectorState();
-}
-
-class _PredictiveBackDetectorState extends State<_PredictiveBackDetector>
-    with WidgetsBindingObserver {
-  bool _active = false;
-
-  bool get _enabled =>
-      widget.route.isCurrent && widget.route.popGestureEnabled;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  bool handleStartBackGesture(PredictiveBackEvent backEvent) {
-    _active = _enabled;
-    if (!_active) return false;
-    widget.route.handleStartBackGesture(progress: 1 - backEvent.progress);
-    return true;
-  }
-
-  @override
-  void handleUpdateBackGestureProgress(PredictiveBackEvent backEvent) {
-    if (!_active) return;
-    widget.route.handleUpdateBackGestureProgress(
-        progress: 1 - backEvent.progress);
-  }
-
-  @override
-  void handleCancelBackGesture() {
-    if (!_active) return;
-    _active = false;
-    widget.route.handleCancelBackGesture();
-  }
-
-  @override
-  void handleCommitBackGesture() {
-    if (!_active) return;
-    _active = false;
-    widget.route.handleCommitBackGesture();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
 }

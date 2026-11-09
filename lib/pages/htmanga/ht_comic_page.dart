@@ -128,8 +128,10 @@ class HtComicPage extends BaseComicPage<HtComicInfo> {
 
   @override
   Widget? get uploaderInfo => MiuixCard(colors: MiuixCardColors(color: Theme.of(context).colorScheme.inversePrimary, contentColor: Theme.of(context).colorScheme.onSurface),
-        child: SizedBox(
-          height: 60,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: SizedBox(
+          height: 56,
           child: Row(
             children: [
               Expanded(
@@ -160,6 +162,7 @@ class HtComicPage extends BaseComicPage<HtComicInfo> {
               ),
             ],
           ),
+        ),
         ),
       );
 

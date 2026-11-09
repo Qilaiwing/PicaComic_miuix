@@ -2,7 +2,6 @@ import 'dart:math';
 import 'dart:ui';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show PredictiveBackEvent;
 import 'package:pica_comic/foundation/app.dart';
 
 part 'hyper_transition.dart';
@@ -65,8 +64,8 @@ mixin _AppRouteTransitionMixin<T> on PageRoute<T> {
   Widget buildContent(BuildContext context);
 
   @override
-  // 底栏切换用 pushAndRemoveUntil 替换根页面：根页面不做滑入动画，
-  // 否则 380ms 内旧页面仍在下面可见，看起来像闪了别的页面。
+  // Root route (IndexedStack tabs) skips slide-in; Duration.zero avoids a
+  // flash under the outgoing secondary animation.
   Duration get transitionDuration =>
       isRootRoute ? Duration.zero : const Duration(milliseconds: 380);
 
@@ -137,21 +136,12 @@ mixin _AppRouteTransitionMixin<T> on PageRoute<T> {
 
   @override
   Widget buildTransitions(BuildContext context, Animation<double> animation, Animation<double> secondaryAnimation, Widget child) {
-    if(isRootRoute) {
-      return FadeTransition(
-        opacity: Tween<double>(begin: 0, end: 1.0).animate(CurvedAnimation(
-            parent: animation,
-            curve: Curves.ease
-        )),
-        child: FadeTransition(
-          opacity: Tween<double>(begin: 1.0, end: 0).animate(CurvedAnimation(
-              parent: secondaryAnimation,
-              curve: Curves.ease
-          )),
-          child: child,
-        ),
-      );
+    // Root route: paint child as-is. No fade/slide — those caused a one-frame
+    // flash when the IndexedStack root was first shown.
+    if (isRootRoute) {
+      return child;
     }
+
 
     final Widget pageWithGesture = (App.enablePopGesture && enableIOSGesture)
         ? IOSBackGestureDetector(
@@ -161,14 +151,11 @@ mixin _AppRouteTransitionMixin<T> on PageRoute<T> {
             child: child)
         : child;
 
-    return _PredictiveBackDetector(
-      route: this,
-      child: HyperPageTransition(
-        animation: animation,
-        secondaryAnimation: secondaryAnimation,
-        linear: navigator?.userGestureInProgress ?? false,
-        child: pageWithGesture,
-      ),
+    return HyperPageTransition(
+      animation: animation,
+      secondaryAnimation: secondaryAnimation,
+      linear: navigator?.userGestureInProgress ?? false,
+      child: pageWithGesture,
     );
   }
 

@@ -9,7 +9,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:pica_comic/base.dart';
 import 'package:pica_comic/comic_source/built_in/picacg.dart';
 import 'package:pica_comic/comic_source/built_in/jm.dart';
@@ -100,6 +100,33 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
 
   double offset = 0;
 
+  /// 路由滑入完成后再挂分类列表，避免首帧重布局与 Hyper 过渡抢同一帧。
+  bool _entered = false;
+
+  void _armEnterAfterTransition() {
+    if (_entered) return;
+    final animation = ModalRoute.of(context)?.animation;
+    void mark() {
+      if (!mounted || _entered) return;
+      setState(() => _entered = true);
+    }
+    if (animation == null ||
+        animation.status == AnimationStatus.completed) {
+      mark();
+      return;
+    }
+    late final void Function(AnimationStatus) listener;
+    listener = (status) {
+      if (status == AnimationStatus.completed) {
+        animation.removeStatusListener(listener);
+        mark();
+      }
+    };
+    animation.addStatusListener(listener);
+    // 兜底：动画被打断也尽快显示
+    Future<void>.delayed(const Duration(milliseconds: 420), mark);
+  }
+
   late final MiuixExitUntilCollapsedScrollBehavior _leftBehavior;
   late final MiuixExitUntilCollapsedScrollBehavior _rightBehavior;
 
@@ -123,6 +150,11 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
     _leftBehavior = MiuixExitUntilCollapsedScrollBehavior();
     _rightBehavior = MiuixExitUntilCollapsedScrollBehavior();
     currentPage = widget.initialPage;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncPopGesture();
+      _armEnterAfterTransition();
+    });
     gestureRecognizer = HorizontalDragGestureRecognizer(debugOwner: this)
       ..onUpdate = ((details) => setState(() => offset += details.delta.dx))
       ..onEnd = (details) async {
@@ -132,11 +164,13 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
             Future.delayed(const Duration(milliseconds: 300), () => offset = 0);
             currentPage = -1;
           });
+          _syncPopGesture();
         } else if (offset > MediaQuery.of(context).size.width / 2) {
           setState(() {
             Future.delayed(const Duration(milliseconds: 300), () => offset = 0);
             currentPage = -1;
           });
+          _syncPopGesture();
         } else {
           int i = 10;
           while (offset != 0) {
@@ -179,6 +213,20 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
 
   @override
   Widget build(BuildContext context) {
+    // 不在 build 里改 PopGesture / canPop（会触发路由侧重建，打开动画掉帧）。
+    // 外层不再套空 MiuixScaffold：分类页 / 分区页各自已有脚手架，嵌套会造成
+    // 过渡动画期间多一次布局沉降，体感卡顿。
+    final bg = MiuixTheme.of(context).colors.background;
+    return ColoredBox(
+      color: bg,
+      child: Material(
+        color: bg,
+        child: buildBody(),
+      ),
+    );
+  }
+
+  void _syncPopGesture() {
     if (widget.singlePage) {
       canPop.value = true;
       App.temporaryDisablePopGesture = false;
@@ -189,9 +237,6 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
       canPop.value = true;
       App.temporaryDisablePopGesture = false;
     }
-    return MiuixScaffold(
-      content: (_) => buildBody(),
-    );
   }
 
   Widget buildBody() {
@@ -249,14 +294,11 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
   }
 
   Widget buildLeft() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return MiuixScaffold(
       topBar: MiuixTopAppBar(color: MiuixTheme.of(context).colors.background, 
         title: "设置".tl,
         scrollBehavior: _leftBehavior,
-        blurred: true,
-        blurRadius: 0,
-        blurTintAlpha: 0,
+        blurred: false,
         navigationIcon: Navigator.of(context).canPop()
             ? MiuixTooltipBox(
  tooltip: (_, scope) => MiuixPlainTooltip(scope: scope, child: Text("返回".tl)),
@@ -273,7 +315,9 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
       ),
       content: (padding) => MiuixScrollBehaviorListener(
         behavior: _leftBehavior,
-        child: buildCategories(padding),
+        child: _entered
+            ? buildCategories(padding)
+            : SizedBox(height: padding.top),
       ),
     );
   }
@@ -319,11 +363,14 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
         child: MiuixPressable(
-          onPressed: () => setState(() {
-            _rightBehavior.state.heightOffset = 0;
-            _rightBehavior.state.contentOffset = 0;
-            currentPage = id;
-          }),
+          onPressed: () {
+            setState(() {
+              _rightBehavior.state.heightOffset = 0;
+              _rightBehavior.state.contentOffset = 0;
+              currentPage = id;
+            });
+            _syncPopGesture();
+          },
           feedbackType: MiuixPressFeedbackType.sink,
           shape: itemShape,
           child: content,
@@ -460,8 +507,24 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
             if (App.isDesktop || App.isAndroid)
               MiuixArrowPreference(
                 startAction: _mi(MiuixIcons.os4.folder),
-                title: "设置下载目录".tl,
-                onClick: () => setDownloadFolder(),
+                title: "漫画下载目录".tl,
+                summary: downloadFolderSummary(),
+                onClick: () {
+                  setDownloadFolder().then((_) {
+                    if (mounted) setState(() {});
+                  });
+                },
+              ),
+            if (App.isDesktop || App.isAndroid)
+              MiuixArrowPreference(
+                startAction: _mi(MiuixIcons.os4.image),
+                title: "图片保存目录".tl,
+                summary: imageSaveFolderSummary(),
+                onClick: () {
+                  setImageSaveFolder().then((_) {
+                    if (mounted) setState(() {});
+                  });
+                },
               ),
             MiuixArrowPreference(
               startAction: _mi(MiuixIcons.os4.fileDownloads),
@@ -667,7 +730,7 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
             MiuixArrowPreference(
               startAction: _mi(MiuixIcons.os4.listView),
               title: "更新日志".tl,
-              summary: "查看最新版本的更新内容".tl,
+              summary: "查看当前版本的更新内容".tl,
               onClick: () => showLatestChangelog(context),
             ),
           ],
@@ -725,14 +788,11 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
     };
 
     if (currentPage != -1) {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
       return MiuixScaffold(
         topBar: MiuixTopAppBar(color: MiuixTheme.of(context).colors.background, 
           title: categories[currentPage].tl,
           scrollBehavior: _rightBehavior,
-          blurred: true,
-          blurRadius: 0,
-          blurTintAlpha: 0,
+          blurred: false,
           navigationIcon: enableTwoViews && !widget.singlePage
               ? null
               : MiuixIconButton(
@@ -741,12 +801,17 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
                         MiuixIcons.os4.back,
                     size: 20,
                   ),
-                  onPressed: () => widget.singlePage
-                      ? _singlePageBack()
-                      : setState(() {
-                          _leftBehavior.state.heightOffset = 0;
-                          currentPage = -1;
-                        }),
+                  onPressed: () {
+                    if (widget.singlePage) {
+                      _singlePageBack();
+                    } else {
+                      setState(() {
+                        _leftBehavior.state.heightOffset = 0;
+                        currentPage = -1;
+                      });
+                      _syncPopGesture();
+                    }
+                  },
                 ),
         ),
         content: (padding) => MiuixScrollBehaviorListener(
@@ -795,6 +860,7 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
         _leftBehavior.state.heightOffset = 0;
         currentPage = -1;
       });
+            _syncPopGesture();
     }
   }
 
@@ -806,6 +872,7 @@ class _SettingsPageState extends State<SettingsPage> implements PopEntry{
         _leftBehavior.state.heightOffset = 0;
         currentPage = -1;
       });
+            _syncPopGesture();
     }
   }
 }

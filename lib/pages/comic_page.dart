@@ -734,29 +734,41 @@ class ComicPageLogic<T extends Object> extends StateController {
   int colorIndex = 0;
   bool? favoriteOnPlatform;
 
+  /// Prevents stampeding the comic-info API when the loading builder rebuilds
+  /// (route transition / LayoutBuilder). Concurrent TLS handshakes to the same
+  /// host often surface as "Connection terminated during handshake".
+  bool _fetching = false;
+
   void get(Future<Res<T>> Function() loadData,
       Future<bool> Function(T) loadFavorite, String Function() getId) async {
-    var [res, _] = await Future.wait(
-        [loadData(), Future.delayed(const Duration(milliseconds: 300))]);
-    if (res.error) {
-      message = res.errorMessage;
-      if (message == "Exit") {
-        loading = false;
-        return;
+    if (_fetching) return;
+    _fetching = true;
+    try {
+      var [res, _] = await Future.wait(
+          [loadData(), Future.delayed(const Duration(milliseconds: 300))]);
+      if (res.error) {
+        message = res.errorMessage;
+        if (message == "Exit") {
+          loading = false;
+          return;
+        }
+      } else {
+        data = res.data;
+        favorite = await loadFavorite(res.data);
       }
-    } else {
-      data = res.data;
-      favorite = await loadFavorite(res.data);
+      loading = false;
+      history = await HistoryManager().find(getId());
+      update();
+    } finally {
+      _fetching = false;
     }
-    loading = false;
-    history = await HistoryManager().find(getId());
-    update();
   }
 
   void refresh_() {
     data = null;
     message = null;
     loading = true;
+    _fetching = false;
     update();
   }
 
@@ -1268,7 +1280,6 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
 
   Widget buildInfoCard(String text, BuildContext context,
       {bool title = false, String key = "key"}) {
-    final colorScheme = Theme.of(context).colorScheme;
 
     if (text == "") {
       text = "未知".tl;
@@ -1730,50 +1741,6 @@ abstract class BaseComicPage<T extends Object> extends StatelessWidget {
     );
   }
 
-  Widget _sectionHeader(
-    String title, {
-    Widget? trailing,
-    bool? expanded,
-    VoidCallback? onToggle,
-  }) {
-    final chevron = expanded == null
-        ? null
-        : Icon(
-            expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-            size: 22,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          );
-    return SliverToBoxAdapter(
-      child: Padding(
-        padding: const EdgeInsets.only(top: 4, bottom: 2),
-        child: Row(
-          children: [
-            Expanded(
-              child: onToggle == null
-                  ? MiuixSmallTitle(title)
-                  : MiuixPressable(
-                      onPressed: onToggle,
-                      child: MiuixSmallTitle(title),
-                    ),
-            ),
-            if (trailing != null)
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: trailing,
-              ),
-            if (chevron != null)
-              MiuixIconButton(
-                minWidth: 36,
-                minHeight: 36,
-                onPressed: onToggle,
-                child: chevron,
-              ),
-            const SizedBox(width: 6),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget buildTags(ComicPageLogic logic, BuildContext context) {
     return SliverToBoxAdapter(

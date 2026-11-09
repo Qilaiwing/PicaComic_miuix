@@ -4,7 +4,7 @@ class ManHuaGui extends ComicSource {
 
     key = "manhuagui"
 
-    version = "1.2.3"
+    version = "1.2.4"
 
     minAppVersion = "4.0.0"
 
@@ -66,6 +66,7 @@ show_group: {
             } catch (e) {
                 lastError = e
             }
+            if (i < 2) await new Promise(r => setTimeout(r, 400 * (i + 1)))
         }
         throw lastError
     }

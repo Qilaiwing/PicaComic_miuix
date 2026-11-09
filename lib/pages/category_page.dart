@@ -122,6 +122,7 @@ class CategoryPage extends StatelessWidget {
            Padding(
             padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
             child: Wrap(
+              alignment: WrapAlignment.center,
               children: [
                 if (data.enableRankingPage)
                   buildTag("排行榜".tl, (p0, p1) {
@@ -154,12 +155,27 @@ class CategoryPage extends StatelessWidget {
                 category,
               ),
             ),
-            trailing: MiuixIconButton(
-              onPressed: () => updater(() {}),
-              minWidth: 32,
-              minHeight: 32,
-              child: const Icon(Icons.refresh, size: 18),
-            ),
+            trailing: Builder(builder: (context) {
+              final scheme = Theme.of(context).colorScheme;
+              return MiuixPressable(
+                shape: const StadiumBorder(),
+                onPressed: () => updater(() {}),
+                child: Container(
+                  width: kStickyCapsuleRefreshExtent,
+                  height: kStickyCapsuleRefreshExtent,
+                  alignment: Alignment.center,
+                  decoration: ShapeDecoration(
+                    shape: const StadiumBorder(),
+                    color: stickyCapsuleColor(context),
+                  ),
+                  child: Icon(
+                    Icons.refresh,
+                    size: kStickyCapsuleIconSize,
+                    color: scheme.primary,
+                  ),
+                ),
+              );
+            }),
           );
         }));
       } else {
@@ -182,7 +198,7 @@ class CategoryPage extends StatelessWidget {
         );
       }
     }
-    // 每个分组标题吸顶（毛玻璃），下一组的标题会把它顶走。
+    // 每个分组标题吸顶（毛玻璃，压住内容时才模糊），下一组的标题会把它顶走。
     return CustomScrollView(
       slivers: [
         const TopInsetSliver(),
@@ -207,28 +223,6 @@ class CategoryPage extends StatelessWidget {
     );
   }
 
-  Widget buildTitleWithRefresh(String title, void Function() onRefresh) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 6),
-      child: Row(
-        children: [
-          Text(
-            title.tl,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              letterSpacing: -0.2,
-            ),
-          ),
-          const Spacer(),
-          MiuixIconButton(
-            onPressed: onRefresh,
-            child: const Icon(Icons.refresh, size: 20),
-          )
-        ],
-      ),
-    );
-  }
 
   Widget buildTagsWithParams(
     List<String> tags,
@@ -239,6 +233,7 @@ class CategoryPage extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
       child: Wrap(
+        alignment: WrapAlignment.center,
         children: List<Widget>.generate(
           tags.length,
           (index) => buildTag(
@@ -270,13 +265,12 @@ class CategoryPage extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(5, 4, 5, 4),
       child: MiuixPressable(
-          shape: const MiuixSquircleBorder(cornerRadius: 12),
+          shape: const StadiumBorder(),
           onPressed: () => onClick(tag, param),
           child: Container(
             decoration: ShapeDecoration(
               color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F4),
-              shape: MiuixSquircleBorder(
-                cornerRadius: 12,
+              shape: StadiumBorder(
                 side: BorderSide(
                   color: isDark
                       ? const Color(0x18FFFFFF)
@@ -297,7 +291,7 @@ class CategoryPage extends StatelessWidget {
   bool get enableTranslation => App.locale.languageCode == 'zh';
 }
 
-/// Sticky frosted header + the group's card body.
+/// Frosted sticky section header + the group's card body.
 Widget _categorySection(String title, Widget body, {Widget? trailing}) {
   return MultiSliver(pushPinnedChildren: true, children: [
     StickySectionHeader(title: title.tl, trailing: trailing),
@@ -311,7 +305,6 @@ class _CategoryGroupCard extends StatelessWidget {
   const _CategoryGroupCard({
     required this.title,
     required this.child,
-    this.onRefresh,
     this.showTitle = true,
   });
 
@@ -319,7 +312,6 @@ class _CategoryGroupCard extends StatelessWidget {
 
   final String title;
   final Widget child;
-  final VoidCallback? onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -338,9 +330,9 @@ class _CategoryGroupCard extends StatelessWidget {
         color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
         shadows: [
           BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.25 : 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+            color: Colors.black.withOpacity(isDark ? 0.14 : 0.025),
+            blurRadius: 6,
+            offset: const Offset(0, 1),
           ),
         ],
       ),
@@ -361,13 +353,6 @@ class _CategoryGroupCard extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
-                if (onRefresh != null)
-                  MiuixIconButton(
-                    onPressed: onRefresh,
-                    minWidth: 32,
-                    minHeight: 32,
-                    child: const Icon(Icons.refresh, size: 18),
-                  ),
               ],
             ),
           ),

@@ -228,7 +228,10 @@ class ComicReadingPage extends StatelessWidget {
             type: history!.type.value);
       }
       logic.addIndexChangeCallback(_onStatsPage);
-      BaseImageProvider.setCacheSizeLimit(100 * 1024 * 1024);
+      // Larger decoded/byte caches while reading; no downscale/cacheWidth.
+      BaseImageProvider.setCacheSizeLimit(150 * 1024 * 1024);
+      PaintingBinding.instance.imageCache.maximumSize = 200;
+      PaintingBinding.instance.imageCache.maximumSizeBytes = 350 * 1024 * 1024;
       logic.openEpsView = openEpsDrawer;
       if (useDarkBackground) {
         Future.microtask(() =>
@@ -241,6 +244,7 @@ class ComicReadingPage extends StatelessWidget {
       //清除缓存并减小最大缓存
       BaseImageProvider.clearCache();
       BaseImageProvider.setCacheSizeLimit(50 * 1024 * 1024);
+      PaintingBinding.instance.imageCache.maximumSizeBytes = 200 * 1024 * 1024;
       logic.clearPhotoViewControllers();
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
       SystemChrome.setPreferredOrientations(DeviceOrientation.values);
@@ -257,6 +261,7 @@ class ComicReadingPage extends StatelessWidget {
       LocalFavoritesManager().onReadEnd(readingData.favoriteId, readingData.favoriteType);
       // 保存历史记录
       if (history != null) {
+        logic.flushHistory();
         _updateHistory(logic, true);
       }
       // 退出全屏
@@ -264,7 +269,8 @@ class ComicReadingPage extends StatelessWidget {
         logic.fullscreen();
       }
       if (!DownloadManager().isDownloading) {
-        ImageManager.clearTasks();
+        // Really cancel in-flight reader image downloads.
+        ImageManager.cancelTasks();
       }
       // 更新漫画详情页面
       Future.microtask(() {
@@ -287,7 +293,6 @@ class ComicReadingPage extends StatelessWidget {
         ),
         child: MiuixScaffold(containerColor: useDarkBackground ? Colors.black : MiuixTheme.of(context).colors.background, floatingActionButton: buildEpChangeButton(logic), content: (_) => StateBuilder<ComicReadingPageLogic>(builder: (logic) {
             if (logic.isLoading) {
-              history?.readEpisode.add(logic.order);
               loadInfo(logic);
               return const Center(
                 child: MiuixInfiniteProgressIndicator(),
@@ -468,8 +473,21 @@ class ComicReadingPage extends StatelessWidget {
   }
 
   void loadInfo(ComicReadingPageLogic logic) async {
+    // build() 在加载中可能被多次调用（任何 update() 都会重建），避免同一章节重复请求
+    if (logic.loadingOrder == logic.order) return;
+    final order = logic.order;
+    history?.readEpisode.add(order);
+    logic.loadingOrder = order;
     logic.urls = [];
-    var res = await readingData.loadEp(logic.order);
+    var res = await readingData.loadEp(order);
+    if (logic.loadingOrder == order) {
+      logic.loadingOrder = null;
+    }
+    // 已离开阅读器或已切换章节：丢弃过期结果
+    if (StateController.findOrNull<ComicReadingPageLogic>() != logic ||
+        logic.order != order) {
+      return;
+    }
     if (res.error) {
       logic.errorMessage = res.errorMessage;
     } else {
@@ -505,17 +523,25 @@ class ComicReadingPage extends StatelessWidget {
   /// Used when [ComicReadingPageLogic.readingMethod] is [ReadingMethod.topToBottomContinuously].
   ///
   /// Select a image form screen, to share or download
-  Future<int?> selectImage() async {
+  /// 连续滚动时从屏幕上选一页。
+  /// [forFavorite] 为 true 时标题用 P 数，并在已收藏页后显示胶囊标记。
+  Future<int?> selectImage({bool forFavorite = false}) async {
     var logic = StateController.find<ComicReadingPageLogic>();
     var items = logic.itemScrollListener.itemPositions.value.toList();
     if (items.length == 1) {
       return items[0].index;
     }
+    final comicId = "${logic.data.sourceKey}-${logic.data.id}";
+    final ep = logic.order;
+    final favored = forFavorite
+        ? ImageFavoriteManager.favoritedPages(comicId, ep)
+        : const <int>{};
     int? res;
     await showMiuixDialog<void>(
         context: App.globalContext!,
         title: "选择屏幕上的图片".tl,
         contentBuilder: (context, close) {
+          final primary = Theme.of(context).colorScheme.primary;
           return ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 400),
             child: Column(
@@ -523,7 +549,27 @@ class ComicReadingPage extends StatelessWidget {
               children: [
                 for (var item in items)
                   MiuixArrowPreference(
-                    title: (item.index + 1).toString(),
+                    title: "P${item.index + 1}",
+                    endActions: forFavorite && favored.contains(item.index + 1)
+                        ? [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: ShapeDecoration(
+                                color: primary.withOpacity(0.14),
+                                shape: const StadiumBorder(),
+                              ),
+                              child: Text(
+                                "已收藏".tl,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: primary,
+                                ),
+                              ),
+                            ),
+                          ]
+                        : null,
                     onClick: () {
                       res = item.index;
                       close();
@@ -556,51 +602,44 @@ class ComicReadingPage extends StatelessWidget {
   }
 
   void share() async {
-    var logic = StateController.find<ComicReadingPageLogic>();
-    int? index = logic.index - 1;
-    if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-      index = await selectImage();
-    }
-    if (index == null) {
-      return;
-    }
+    try {
+      var logic = StateController.find<ComicReadingPageLogic>();
+      int? index = logic.index - 1;
+      if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
+        index = await selectImage();
+      }
+      if (index == null) {
+        return;
+      }
 
-    var file = await _getFileFromStream(
-        readingData.loadImage(logic.order, index, logic.urls[index]));
+      var file = await _getFileFromStream(
+          readingData.loadImage(logic.order, index, logic.urls[index]));
 
-    shareImage(file);
+      await shareImage(file);
+    } catch (e) {
+      showToast(message: e.toString());
+    }
   }
 
-  Future<String?> _persistentCurrentImage() async {
-    var logic = StateController.find<ComicReadingPageLogic>();
-    int? index = logic.index - 1;
-    if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-      index = await selectImage();
-    }
-    if (index == null) {
-      return null;
-    }
-
-    var file = await _getFileFromStream(
-        readingData.loadImage(logic.order, index, logic.urls[index]));
-
-    return persistentCurrentImage(file);
-  }
 
   void saveCurrentImage() async {
-    var logic = StateController.find<ComicReadingPageLogic>();
-    int? index = logic.index - 1;
-    if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-      index = await selectImage();
-    }
-    if (index == null) {
-      return;
-    }
+    try {
+      var logic = StateController.find<ComicReadingPageLogic>();
+      int? index = logic.index - 1;
+      if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
+        index = await selectImage();
+      }
+      if (index == null) {
+        return;
+      }
 
-    var file = await _getFileFromStream(
-        readingData.loadImage(logic.order, index, logic.urls[index]));
+      var file = await _getFileFromStream(
+          readingData.loadImage(logic.order, index, logic.urls[index]));
 
-    saveImage(file);
+      await saveImage(file);
+    } catch (e) {
+      showToast(message: e.toString());
+    }
   }
 
   Widget? buildEpChangeButton(ComicReadingPageLogic logic) {

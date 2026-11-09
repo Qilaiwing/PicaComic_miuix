@@ -211,6 +211,13 @@ mixin class _JSEngineApi{
   final Map<int, dom.Element> _elements = {};
   CookieJarSql? _cookieJar;
 
+  int _nextElementKey() {
+    // Keys must be > 0: assets/init.js historically used `if (!k)` which
+    // treats 0 as missing. Keep allocating from 1 even after clear().
+    final key = _elements.length + 1;
+    return key;
+  }
+
   dynamic handleHtmlCallback(Map<String, dynamic> data) {
     switch (data["function"]) {
       case "parse":
@@ -219,14 +226,16 @@ mixin class _JSEngineApi{
       case "querySelector":
         var res = _documents[data["key"]]!.querySelector(data["query"]);
         if(res == null) return null;
-        _elements[_elements.length] = res;
-        return _elements.length - 1;
+        final key = _nextElementKey();
+        _elements[key] = res;
+        return key;
       case "querySelectorAll":
         var res = _documents[data["key"]]!.querySelectorAll(data["query"]);
         var keys = <int>[];
         for(var element in res){
-          _elements[_elements.length] = element;
-          keys.add(_elements.length - 1);
+          final key = _nextElementKey();
+          _elements[key] = element;
+          keys.add(key);
         }
         return keys;
       case "getText":
@@ -236,22 +245,25 @@ mixin class _JSEngineApi{
       case "dom_querySelector":
         var res = _elements[data["key"]]!.querySelector(data["query"]);
         if(res == null) return null;
-        _elements[_elements.length] = res;
-        return _elements.length - 1;
+        final key = _nextElementKey();
+        _elements[key] = res;
+        return key;
       case "dom_querySelectorAll":
         var res = _elements[data["key"]]!.querySelectorAll(data["query"]);
         var keys = <int>[];
         for(var element in res){
-          _elements[_elements.length] = element;
-          keys.add(_elements.length - 1);
+          final key = _nextElementKey();
+          _elements[key] = element;
+          keys.add(key);
         }
         return keys;
       case "getChildren":
         var res = _elements[data["key"]]!.children;
         var keys = <int>[];
         for (var element in res) {
-          _elements[_elements.length] = element;
-          keys.add(_elements.length - 1);
+          final key = _nextElementKey();
+          _elements[key] = element;
+          keys.add(key);
         }
         return keys;
     }

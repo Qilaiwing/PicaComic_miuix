@@ -407,97 +407,97 @@ class _MixedExplorePageState
   }
 }
 
+/// Strip JM home-section instructional suffixes like 「→右滑看更多→」 from titles.
+String cleanExplorePartTitle(String raw) {
+  var t = raw.trim();
+  if (t.contains("連載更新") || t.contains("连载更新")) {
+    return "连载更新".tl;
+  }
+  const suffixes = <String>[
+    "→右滑看更多→",
+    "->右滑看更多->",
+    "→右滑查看更多→",
+    "->右滑查看更多->",
+    "右滑查看更多",
+    "右滑看更多",
+    "→",
+    "->",
+  ];
+  for (final s in suffixes) {
+    t = t.replaceAll(s, "");
+  }
+  return t.trim();
+}
+
 Iterable<Widget> _buildExplorePagePart(
     ExplorePagePart part, String sourceKey) sync* {
   Widget buildTitle(ExplorePagePart part) {
-    // 分区标题吸顶：滚动到该分区时固定在内容顶部（顶栏下方），被下一分区标题推走。
-    return SliverPinnedHeader(
-      child: Builder(builder: (context) => FrostedBackground(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 10, 12, 6),
-        child: Row(
-          children: [
-            Text(
-              part.title.contains("連載更新") || part.title.contains("连载更新")
-                  ? "连载更新".tl
-                  : part.title
-                      .replaceAll("→右滑看更多→", "")
-                      .replaceAll("->右滑看更多->", "")
-                      .trim(),
-              style: MiuixTheme.of(context).textStyles.title4.copyWith(
-                fontWeight: FontWeight.w600,
-                color: MiuixTheme.of(context).colors.onBackground,
-              ),
+    // 分区标题吸顶；被下一分区标题推走。禁漫 API 标题常带「右滑看更多」提示文案，这里剥掉。
+    final titleText = cleanExplorePartTitle(part.title);
+    Widget? trailing;
+    if (part.viewMore != null) {
+      trailing = Builder(builder: (context) {
+        final scheme = Theme.of(context).colorScheme;
+        return MiuixPressable(
+          shape: const StadiumBorder(),
+          onPressed: () {
+            var navContext = App.mainNavigatorKey!.currentContext!;
+            if (part.viewMore!.startsWith("search:")) {
+              navContext.to(
+                () => SearchResultPage(
+                  keyword: part.viewMore!.replaceFirst("search:", ""),
+                  sourceKey: sourceKey,
+                ),
+              );
+            } else if (part.viewMore!.startsWith("category:")) {
+              var cp = part.viewMore!.replaceFirst("category:", "");
+              var c = cp.split('@').first;
+              String? p = cp.split('@').last;
+              if (p == c) {
+                p = null;
+              }
+              // 二级页标题用清洗后的文案；加载仍走 param（分区 id/slug）。
+              navContext.to(
+                () => CategoryComicsPage(
+                  category: titleText.isNotEmpty ? titleText : cleanExplorePartTitle(c),
+                  categoryKey:
+                      ComicSource.find(sourceKey)!.categoryData!.key,
+                  param: p,
+                ),
+              );
+            }
+          },
+          child: Container(
+            decoration: ShapeDecoration(
+              shape: const StadiumBorder(),
+              color: stickyCapsuleColor(context),
             ),
-            const Spacer(),
-            if (part.viewMore != null)
-              MiuixPressable(
-                  shape: const MiuixSquircleBorder(cornerRadius: 14),
-                  onPressed: () {
-                    var context = App.mainNavigatorKey!.currentContext!;
-                    if (part.viewMore!.startsWith("search:")) {
-                      context.to(
-                        () => SearchResultPage(
-                          keyword: part.viewMore!.replaceFirst("search:", ""),
-                          sourceKey: sourceKey,
-                        ),
-                      );
-                    } else if (part.viewMore!.startsWith("category:")) {
-                      var cp = part.viewMore!.replaceFirst("category:", "");
-                      var c = cp.split('@').first;
-                      String? p = cp.split('@').last;
-                      if (p == c) {
-                        p = null;
-                      }
-                      context.to(
-                        () => CategoryComicsPage(
-                          category: c,
-                          categoryKey:
-                              ComicSource.find(sourceKey)!.categoryData!.key,
-                          param: p,
-                        ),
-                      );
-                    }
-                  },
-                  child: Container(
-                    decoration: ShapeDecoration(
-                      shape: const MiuixSquircleBorder(cornerRadius: 14),
-                      color: Theme.of(App.globalContext!).brightness ==
-                              Brightness.dark
-                          ? const Color(0x18FFFFFF)
-                          : const Color(0x0A000000),
-                    ),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          "查看更多".tl,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: Theme.of(App.globalContext!)
-                                .colorScheme
-                                .primary,
-                          ),
-                        ),
-                        MiuixIcon(
-                          vector: MiuixIcons.os4.chevronForward,
-                          size: 14,
-                          tint:
-                              Theme.of(App.globalContext!).colorScheme.primary,
-                        ),
-                      ],
-                    ),
-                  )),
-          ],
-        ),
-      ),
-      )),
-    );
+            padding: kStickyCapsulePadding,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "查看更多".tl,
+                  style: TextStyle(
+                    fontSize: kStickyCapsuleFontSize,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.primary,
+                    height: 1.15,
+                  ),
+                ),
+                MiuixIcon(
+                  vector: MiuixIcons.os4.chevronForward,
+                  size: kStickyCapsuleIconSize,
+                  tint: scheme.primary,
+                ),
+              ],
+            ),
+          ),
+        );
+      });
+    }
+    return StickySectionHeader(title: titleText, trailing: trailing);
   }
-
   Widget buildComics(ExplorePagePart part) {
     return SliverGridComics(comics: part.comics, sourceKey: sourceKey);
   }

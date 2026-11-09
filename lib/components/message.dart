@@ -46,7 +46,7 @@ class _ToastOverlay extends StatelessWidget {
                   color: MiuixTheme.of(context)
                       .colors
                       .surfaceContainer
-                      .withValues(alpha: 0.88),
+                      .withValues(alpha: frostEnabled ? 0.88 : 1.0),
                   cornerRadius: 20,
                   shadowElevation: 2,
                   child: Container(

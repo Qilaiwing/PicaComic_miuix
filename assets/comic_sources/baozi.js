@@ -8,7 +8,7 @@ class Baozi extends ComicSource {
     // 唯一标识符
     key = "baozi"
 
-    version = "1.4.3"
+    version = "1.4.4"
 
     minAppVersion = "4.0.0"
 
@@ -327,6 +327,20 @@ language: {
         }
     }
 
+
+    async loadEpWithRetry(comicId, epId) {
+        let lastError = null
+        for (let i = 0; i < 3; i++) {
+            try {
+                return await this.comic._loadEpOnce(comicId, epId)
+            } catch (e) {
+                lastError = e
+                await new Promise(r => setTimeout(r, 500 * (i + 1)))
+            }
+        }
+        throw lastError
+    }
+
     comic = {
         // 加载漫画信息
         loadInfo: async (id) => {
@@ -384,7 +398,8 @@ language: {
             }
         },
         // 获取章节图片
-        loadEp: async (comicId, epId) => {
+        loadEp: async (comicId, epId) => this.loadEpWithRetry(comicId, epId),
+        _loadEpOnce: async (comicId, epId) => {
             let ep = epId.includes('_') ? epId : '0_' + epId
             let images = []
             let res = await Network.get(`${this.baseUrl}/comic/chapter/${comicId}/${ep}.html`)

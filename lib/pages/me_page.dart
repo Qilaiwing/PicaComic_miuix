@@ -151,12 +151,13 @@ class _MePageState extends State<MePage> with WidgetsBindingObserver {
   Widget buildProfile() {
     final context = App.globalContext!;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primary = Theme.of(context).colorScheme.primary;
-    final onCard = isDark ? Colors.white : const Color(0xFF1A1A1C);
+    final miuixColors = MiuixTheme.of(context).colors;
+    final primary = miuixColors.primary;
+    final onCard = miuixColors.onSurface;
 
     final profile = getPicacgProfile();
     final logged = profile != null;
-    final accounts = findAccounts().length;
+    final enabledSources = ComicSource.sources.length;
     final historyCount = HistoryManager().count();
     final todayReadMs = ReadingStats.instance.today[0];
     final usageText = _formatUsage(Duration(milliseconds: todayReadMs));
@@ -323,8 +324,8 @@ class _MePageState extends State<MePage> with WidgetsBindingObserver {
             children: [
               buildStat(
                 title: "漫画源".tl,
-                value: accounts.toString(),
-                highlight: accounts > 0,
+                value: enabledSources.toString(),
+                highlight: enabledSources > 0,
                 onTap: () async {
                   await showPopUpWidget(context, const AccountsPage());
                   if (mounted) setState(() {});
@@ -340,7 +341,8 @@ class _MePageState extends State<MePage> with WidgetsBindingObserver {
               buildStat(
                 title: "今日阅读".tl,
                 value: usageText,
-                highlight: true,
+                // 与「漫画源」一致：为 0 时走 onSurface（主题文字色），有值时用 primary
+                highlight: todayReadMs > 0,
                 onTap: () => context.to(() => const ReadingStatsPage()),
               ),
             ],
@@ -502,15 +504,6 @@ class _MePageState extends State<MePage> with WidgetsBindingObserver {
     );
   }
 
-  List<String> findAccounts() {
-    var result = <String>[];
-    for (var source in ComicSource.sources) {
-      if (source.isLogin) {
-        result.add(source.name.tl);
-      }
-    }
-    return result;
-  }
 }
 
 class _MePageCard extends StatelessWidget {

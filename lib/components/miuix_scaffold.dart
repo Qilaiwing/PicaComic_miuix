@@ -19,7 +19,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart' as m;
-import 'package:pica_comic/components/components.dart' show FrostedBackground;
+import 'package:pica_comic/components/components.dart'
+    show FrostedBackground, frostEnabled;
 
 /// Neutral text style for top bars: keeps family/color, drops the inherited
 /// Material line height so TextPainter measurements match rendering.
@@ -145,12 +146,32 @@ class MiuixScaffold extends StatelessWidget {
           );
     }
     if (bar is m.MiuixSmallTopAppBar) {
-      // 小顶栏没有自带模糊：去掉实色背景，套统一毛玻璃。
-      effectiveBar = FrostedBackground(
-        child: m.MiuixSmallTopAppBar(
+      if (frostEnabled) {
+        // 小顶栏没有自带模糊：去掉实色背景，套统一毛玻璃。
+        effectiveBar = FrostedBackground(
+          child: m.MiuixSmallTopAppBar(
+            key: bar.key,
+            title: bar.title,
+            color: Colors.transparent,
+            titleColor: bar.titleColor,
+            subtitle: bar.subtitle,
+            subtitleColor: bar.subtitleColor,
+            navigationIcon: bar.navigationIcon,
+            actions: bar.actions,
+            scrollBehavior: bar.scrollBehavior,
+            defaultWindowInsetsPadding: bar.defaultWindowInsetsPadding,
+            titlePadding: bar.titlePadding,
+            navigationIconPadding: bar.navigationIconPadding,
+            actionIconPadding: bar.actionIconPadding,
+            bottomContent: bar.bottomContent,
+          ),
+        );
+      } else {
+        // 关毛玻璃：保持包内实色 Material，不要套半透明 FrostedBackground。
+        effectiveBar = m.MiuixSmallTopAppBar(
           key: bar.key,
           title: bar.title,
-          color: Colors.transparent,
+          color: bar.color ?? m.MiuixTheme.of(context).colors.background,
           titleColor: bar.titleColor,
           subtitle: bar.subtitle,
           subtitleColor: bar.subtitleColor,
@@ -162,13 +183,39 @@ class MiuixScaffold extends StatelessWidget {
           navigationIconPadding: bar.navigationIconPadding,
           actionIconPadding: bar.actionIconPadding,
           bottomContent: bar.bottomContent,
-        ),
-      );
+        );
+      }
     }
     if (bar is m.MiuixTopAppBar && bar.blurred) {
-      // 包里的模糊随滚动 0→20px 渐入；这里给常驻毛玻璃，内容一进到顶栏下方就模糊
-      // （静止时下方是纯背景，常驻毛玻璃看起来和不透明一致）。调用方把包内模糊设成 0。
-      effectiveBar = FrostedBackground(child: bar);
+      // 调用方常写 blurred:true + blurRadius:0。包内即便 sigma/tint 为 0，
+      // 滚动时仍会创建 BackdropFilter，这里一律关掉包内 blurred，
+      // 开毛玻璃时改由 FrostedBackground 提供模糊，并让栏身透明透出效果。
+      final solid = bar.color ?? m.MiuixTheme.of(context).colors.background;
+      final rebuilt = m.MiuixTopAppBar(
+        key: bar.key,
+        title: bar.title,
+        color: frostEnabled ? Colors.transparent : solid,
+        titleColor: bar.titleColor,
+        largeTitle: bar.largeTitle,
+        largeTitleColor: bar.largeTitleColor,
+        subtitle: bar.subtitle,
+        subtitleColor: bar.subtitleColor,
+        navigationIcon: bar.navigationIcon,
+        actions: bar.actions,
+        scrollBehavior: bar.scrollBehavior,
+        defaultWindowInsetsPadding: bar.defaultWindowInsetsPadding,
+        titlePadding: bar.titlePadding,
+        navigationIconPadding: bar.navigationIconPadding,
+        actionIconPadding: bar.actionIconPadding,
+        bottomContent: bar.bottomContent,
+        blurred: false,
+        largeTitleBlurRadius: bar.largeTitleBlurRadius,
+        titleAlpha: bar.titleAlpha,
+        clipBehavior: bar.clipBehavior,
+        bottomContentHeightHint: bar.bottomContentHeightHint,
+        onHeightChanged: bar.onHeightChanged,
+      );
+      effectiveBar = frostEnabled ? FrostedBackground(child: rebuilt) : rebuilt;
     }
     if (effectiveBar != null) {
       effectiveBar = MiuixBarTextStyle(child: effectiveBar);

@@ -107,6 +107,7 @@ class _NaviPaneState extends State<NaviPane>
     _currentPage = value;
     _behavior.state.heightOffset = 0;
     _behavior.state.contentOffset = 0;
+    StateController.findOrNull<MainTabController>()?.setIndex(value);
     widget.onPageChange?.call(value);
   }
 
@@ -209,6 +210,7 @@ class _NaviPaneState extends State<NaviPane>
     categoryLogic.init(this);
 
     StateController.putIfNotExists(FavoritesPageController());
+    StateController.putIfNotExists(MainTabController(widget.initialPage));
 
     ComicSource.sourcesChanged.addListener(_onSourcesChanged);
 
@@ -230,6 +232,7 @@ class _NaviPaneState extends State<NaviPane>
     StateController.findOrNull<CategoryPageController>()?.tabController.dispose();
     StateController.remove<CategoryPageController>();
     StateController.remove<NaviPaddingWidgetController>();
+    StateController.remove<MainTabController>();
     controller.dispose();
     widget.observer.removeListener(onNavigatorStateChange);
     super.dispose();
@@ -406,7 +409,9 @@ class _NaviPaneState extends State<NaviPane>
                               alignment: Alignment.topCenter,
                               heightFactor: (1 - value).clamp(0.0, 1.0),
                               child: MiuixBarTextStyle(
-                                  child: FrostedBackground(child: buildTop())),
+                                  child: frostEnabled
+                                      ? FrostedBackground(child: buildTop())
+                                      : buildTop()),
                             ),
                           ),
                       ],
@@ -437,7 +442,6 @@ class _NaviPaneState extends State<NaviPane>
 
   Widget buildTop() {
     final item = widget.paneItems[currentPage];
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     Widget buildActionIcon(PaneActionEntry action) {
       final color = Theme.of(context).colorScheme.onSurface;
@@ -480,11 +484,11 @@ class _NaviPaneState extends State<NaviPane>
             return MiuixTopAppBar(
               key: ValueKey('top_bar_1_${fav.selectingFolder}_${fav.current}'),
               title: title,
-              color: MiuixTheme.of(context).colors.background,
+              color: frostEnabled
+                  ? Colors.transparent
+                  : MiuixTheme.of(context).colors.background,
               scrollBehavior: _behavior,
-              blurred: true,
-              blurRadius: 0,
-              blurTintAlpha: 0,
+              blurred: false,
               onHeightChanged: (info) => _onTopBarHeightChanged(1, info),
               navigationIcon: isViewingComics
                   ? MiuixIconButton(
@@ -528,11 +532,13 @@ class _NaviPaneState extends State<NaviPane>
       return MiuixTopAppBar(
         key: ValueKey('top_bar_2_${exploreLogic?.pages.length}_$hasTabs'),
         title: item.title ?? item.label,
-        color: MiuixTheme.of(context).colors.background,
+        color: frostEnabled
+            ? Colors.transparent
+            : MiuixTheme.of(context).colors.background,
         scrollBehavior: _behavior,
-        blurred: true,
-        blurRadius: 0,
-        blurTintAlpha: 0,
+        // 毛玻璃由外层 FrostedBackground 负责；包内 blurred=true 即使 sigma/tint 为 0
+        // 也会在滚动时创建 BackdropFilter，白白耗电掉帧。
+        blurred: false,
         onHeightChanged: (info) => _onTopBarHeightChanged(2, info),
         bottomContentHeightHint: hasTabs ? _kTabBarHeight : 0,
         bottomContent: hasTabs
@@ -564,11 +570,13 @@ class _NaviPaneState extends State<NaviPane>
       return MiuixTopAppBar(
         key: ValueKey('top_bar_3_${categoryLogic?.categories.length}_$hasTabs'),
         title: item.title ?? item.label,
-        color: MiuixTheme.of(context).colors.background,
+        color: frostEnabled
+            ? Colors.transparent
+            : MiuixTheme.of(context).colors.background,
         scrollBehavior: _behavior,
-        blurred: true,
-        blurRadius: 0,
-        blurTintAlpha: 0,
+        // 毛玻璃由外层 FrostedBackground 负责；包内 blurred=true 即使 sigma/tint 为 0
+        // 也会在滚动时创建 BackdropFilter，白白耗电掉帧。
+        blurred: false,
         onHeightChanged: (info) => _onTopBarHeightChanged(3, info),
         bottomContentHeightHint: hasTabs ? _kTabBarHeight : 0,
         bottomContent: hasTabs
@@ -599,11 +607,11 @@ class _NaviPaneState extends State<NaviPane>
     return MiuixTopAppBar(
       key: ValueKey('top_bar_$currentPage'),
       title: item.title ?? item.label,
-      color: MiuixTheme.of(context).colors.background,
+      color: frostEnabled
+          ? Colors.transparent
+          : MiuixTheme.of(context).colors.background,
       scrollBehavior: _behavior,
-      blurred: true,
-      blurRadius: 0,
-      blurTintAlpha: 0,
+      blurred: false,
       onHeightChanged: (info) => _onTopBarHeightChanged(0, info),
       actions: [
         for (var action in widget.paneActions)
@@ -658,11 +666,12 @@ class _NaviPaneState extends State<NaviPane>
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(31),
-                  color: MiuixTheme.of(context)
-                      .colors
-                      .background
-                      .withValues(
-                          alpha: (frostTintAlpha(context) + 0.22).clamp(0.0, 1.0)),
+                  color: MiuixTheme.of(context).colors.background.withValues(
+                    // 关毛玻璃：纯色底栏；开毛玻璃：略提高不透明度保证可读。
+                    alpha: frostEnabled
+                        ? (frostTintAlpha(context) + 0.22).clamp(0.0, 1.0)
+                        : 1.0,
+                  ),
                   border: Border.all(
                     color: isDark
                         ? const Color(0x24FFFFFF)
@@ -1148,9 +1157,9 @@ class _SingleBottomNaviWidgetState extends State<_SingleBottomNaviWidget>
 class NaviObserver extends NavigatorObserver implements Listenable {
   var routes = Queue<Route>();
 
-  /// 获取当前有效的页面层级深度。
-  /// 当在各个根 Tab 间平滑切换（pushAndRemoveUntil）时，路由栈内可能会暂存新旧两条根路由，
-  /// 此时所有根路由应合并视为层级 1，避免 pageCount 闪现为 2 导致底栏/顶栏被误判隐藏又立刻弹回！
+  /// Effective page depth for chrome visibility.
+  /// Multiple AppPageRoute(isRootRoute: true) entries (if any) count as one
+  /// so top/bottom bars are not briefly hidden when pageCount flickers to 2.
   int get pageCount {
     int count = 0;
     bool hasRoot = false;
@@ -1253,6 +1262,20 @@ class _NaviPopScope extends StatelessWidget {
           child: res);
     }
     return res;
+  }
+}
+
+/// Tracks the selected bottom-nav tab so the root route can keep an
+/// [IndexedStack] of tab pages alive across switches (avoids remount jitter).
+class MainTabController extends StateController {
+  MainTabController(this.index);
+
+  int index;
+
+  void setIndex(int value) {
+    if (index == value) return;
+    index = value;
+    update();
   }
 }
 

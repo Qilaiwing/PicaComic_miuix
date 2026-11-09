@@ -35,7 +35,6 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
     ImageDecoderCallback decode,
   ) async {
     try {
-      int retryTime = 1;
 
       bool stop = false;
 
@@ -45,6 +44,7 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
 
       Uint8List? data;
 
+      int attempt = 0;
       while (data == null && !stop) {
         try {
           if(_cache.containsKey(key.key)){
@@ -65,16 +65,30 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
           if (e is BadRequestException) {
             rethrow;
           }
-          if (e.toString().contains("handshake")) {
-            if (retryTime < 5) {
-              retryTime = 5;
-            }
-          }
-          retryTime <<= 1;
-          if (retryTime > (1 << 3) || stop) {
+          // Dio cancel from leaving reader
+          if (e.toString().contains("cancelled") ||
+              e.toString().contains("Cancel")) {
             rethrow;
           }
-          await Future.delayed(Duration(seconds: retryTime));
+          attempt++;
+          final isHandshake =
+              e.toString().toLowerCase().contains("handshake");
+          if (stop) {
+            rethrow;
+          }
+          if (isHandshake) {
+            // Actually retry handshake failures with short backoff (was a no-op before).
+            if (attempt > 3) {
+              rethrow;
+            }
+            await Future.delayed(Duration(milliseconds: 400 * attempt));
+            continue;
+          }
+          // Other transient errors: 1s, 2s, 4s
+          if (attempt > 3) {
+            rethrow;
+          }
+          await Future.delayed(Duration(seconds: 1 << (attempt - 1)));
         }
       }
 

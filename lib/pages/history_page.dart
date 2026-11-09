@@ -174,7 +174,7 @@ class _HistoryPageState extends State<HistoryPage> {
           coverPath: comic.path,
           name: comic.title,
           subTitle_: comic.author,
-          badgeName: comics_[i].type.name,
+          badgeName: comics_[i].type.displayName,
           headers: {
             if (comics_[i].type == HistoryType.ehentai)
               "cookie": EhNetwork().cookiesStr,

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:pica_comic/base.dart';
 import 'package:pica_comic/components/components.dart';
 import 'package:pica_comic/foundation/app_page_route.dart';
+import 'package:pica_comic/foundation/log.dart';
 import 'package:pica_comic/network/webdav.dart';
 import 'package:pica_comic/tools/app_links.dart';
 import 'package:pica_comic/tools/background_service.dart';
@@ -141,7 +142,18 @@ class MainPageState extends State<MainPage> {
   void _login() {
     network.updateProfile().then((res) {
       if (res.error) {
-        showToast(message: res.errorMessageWithoutNull);
+        final msg = res.errorMessageWithoutNull;
+        LogManager.addLog(
+            LogLevel.info, "Picacg", "launch updateProfile failed: $msg");
+        // 冷启动刷新资料是非关键路径：服务端 5xx / 网络抖动不弹英文原文。
+        // 仅登录失效给中文轻提示，其余静默（账号页仍可手动刷新）。
+        final authFail = msg.contains("登录失效") ||
+            msg.contains("未登录") ||
+            msg.contains("401") ||
+            msg.toLowerCase().contains("unauthorized");
+        if (authFail) {
+          showToast(message: "哔咔登录已失效，请重新登录".tl);
+        }
       } else {
         //检查是否打卡
         if (network.user?.isPunched == false && appdata.settings[6] == "1") {
@@ -162,29 +174,113 @@ class MainPageState extends State<MainPage> {
   }
 
   void _checkUpdates() async {
+    if (appdata.settings[2] != "1") return;
     var s = await SharedPreferences.getInstance();
-    var lastCheck = s.getInt("lastCheckUpdate");
-    if (lastCheck != null) {
-      if (DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(lastCheck)).inDays < 1) {
-        return;
-      }
+
+    Future<void> showPending({
+      required String? version,
+      required String? notes,
+      required String releaseUrl,
+    }) async {
+      if (!mounted || App.globalContext == null) return;
+      showUpdateDialog(App.globalContext!,
+          version: version,
+          notes: notes,
+          releaseUrl: releaseUrl);
     }
-    if (appdata.settings[2] != "1") {
+
+    Future<void> cachePending({
+      required String version,
+      String? tag,
+      String? notes,
+      required String url,
+    }) async {
+      await s.setString("pendingUpdateVersion", version);
+      if (tag != null && tag.isNotEmpty) {
+        await s.setString("pendingUpdateTag", tag);
+      } else {
+        await s.remove("pendingUpdateTag");
+      }
+      if (notes != null) {
+        await s.setString("pendingUpdateNotes", notes);
+      } else {
+        await s.remove("pendingUpdateNotes");
+      }
+      await s.setString("pendingUpdateUrl", url);
+    }
+
+    Future<void> clearPending() async {
+      await s.remove("pendingUpdateVersion");
+      await s.remove("pendingUpdateTag");
+      await s.remove("pendingUpdateNotes");
+      await s.remove("pendingUpdateUrl");
+      clearPendingUpdateMemory();
+    }
+
+    bool stillNewer(String? remote) {
+      if (remote == null || remote.isEmpty) return false;
+      return compareSemVer(remote, appVersion);
+    }
+
+    Future<bool> tryShowFromCache() async {
+      final cachedVer = s.getString("pendingUpdateVersion");
+      if (!stillNewer(cachedVer)) {
+        if (cachedVer != null) await clearPending();
+        return false;
+      }
+      final notes = s.getString("pendingUpdateNotes");
+      final tag = s.getString("pendingUpdateTag");
+      final ver = cachedVer!;
+      final url = s.getString("pendingUpdateUrl") ??
+          getReleasePageUrl(tag ?? "v$ver");
+      hydratePendingUpdate(version: ver, tag: tag, notes: notes);
+      await showPending(version: ver, notes: notes, releaseUrl: url);
+      return true;
+    }
+
+    var lastCheck = s.getInt("lastCheckUpdate");
+    final lastLocal = s.getString("lastCheckUpdateLocalVersion");
+    // 本机版本变了 (升级/降级/测试包) 时强制重新联网, 不受 6 小时节流。
+    final sameLocal = lastLocal == appVersion;
+    final within6h = sameLocal &&
+        lastCheck != null &&
+        DateTime.now()
+                .difference(DateTime.fromMillisecondsSinceEpoch(lastCheck))
+                .inHours <
+            6;
+
+    // 6 小时内已成功查过: 跳过网络, 但若仍有未安装的新版本, 冷启动照样弹窗。
+    if (within6h) {
+      await tryShowFromCache();
       return;
     }
-    var res = await checkUpdate();
-    s.setInt("lastCheckUpdate", DateTime.now().millisecondsSinceEpoch);
-    if (res != true) return;
+
+    // 等首帧和登录/同步等启动请求先走, 避免和它们抢网络。
+    await Future.delayed(const Duration(seconds: 3));
+    bool? res;
+    for (var i = 0; i < 2 && res == null; i++) {
+      if (i > 0) await Future.delayed(const Duration(seconds: 5));
+      res = await checkUpdate();
+    }
+    if (res == null) {
+      // 网络失败时若缓存里仍有更新, 也弹一次。
+      await tryShowFromCache();
+      return;
+    }
+    await s.setInt("lastCheckUpdate", DateTime.now().millisecondsSinceEpoch);
+    await s.setString("lastCheckUpdateLocalVersion", appVersion);
+    if (res != true) {
+      await clearPending();
+      return;
+    }
     var info = await getUpdatesInfo();
     var url = await getDownloadUrl();
-    if (App.globalContext == null) return;
-    showUpdateDialog(App.globalContext!,
-        version: latestVersion,
-        notes: info,
-        releaseUrl: url, onDisableCheck: () {
-      appdata.settings[2] = "0";
-      appdata.writeData();
-    });
+    final ver = latestVersion;
+    if (ver != null) {
+      await cachePending(
+          version: ver, tag: latestTag, notes: info, url: url);
+    }
+    await showPending(version: ver, notes: info, releaseUrl: url);
   }
 
 
@@ -244,41 +340,45 @@ class MainPageState extends State<MainPage> {
             onTap: () => SettingsPage.open()),
       ],
       pageBuilder: (index) {
+        // One stable root route with IndexedStack: switching tabs must NOT
+        // pushAndRemoveUntil a fresh page (that remounts Explore and jerks
+        // TopInset / grid layout for a frame). Only nested routes are cleared.
         return Navigator(
           observers: [_observer],
           key: _navigatorKey,
           onGenerateRoute: (settings) => AppPageRoute(
-            preventRebuild: false,
+            preventRebuild: true,
             isRootRoute: true,
             builder: (context) {
               return PopScope(
                 canPop: false,
                 onPopInvokedWithResult: (didPop, result) {
                   if (didPop) return;
-                  _handleRootBack(index);
+                  final tab = StateController.findOrNull<MainTabController>()
+                          ?.index ??
+                      index;
+                  _handleRootBack(tab);
                 },
-                child: NaviPaddingWidget(child: _pages[index]),
+                child: NaviPaddingWidget(
+                  child: StateBuilder<MainTabController>(
+                    builder: (tab) {
+                      return IndexedStack(
+                        index: tab.index,
+                        sizing: StackFit.expand,
+                        children: _pages,
+                      );
+                    },
+                  ),
+                ),
               );
             },
           ),
         );
       },
       onPageChange: (index) {
-        _navigatorKey!.currentState?.pushAndRemoveUntil(
-            AppPageRoute(
-                preventRebuild: false,
-                isRootRoute: true,
-                builder: (context) {
-                  return PopScope(
-                    canPop: false,
-                    onPopInvokedWithResult: (didPop, result) {
-                      if (didPop) return;
-                      _handleRootBack(index);
-                    },
-                    child: NaviPaddingWidget(child: _pages[index]),
-                  );
-                }),
-            (route) => false);
+        StateController.findOrNull<MainTabController>()?.setIndex(index);
+        // Drop comic-detail etc.; keep the IndexedStack root mounted.
+        _navigatorKey!.currentState?.popUntil((route) => route.isFirst);
       },
     );
   }

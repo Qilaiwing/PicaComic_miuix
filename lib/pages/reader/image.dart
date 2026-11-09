@@ -156,6 +156,9 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   }
 
   ImageStreamListener? _imageStreamListener;
+  DateTime? _lastChunkUiUpdate;
+  int? _lastChunkBytesShown;
+
   ImageStreamListener _getListener({bool recreateListener = false}) {
     if(_imageStreamListener == null || recreateListener) {
       _lastException = null;
@@ -177,12 +180,28 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       _replaceImage(info: imageInfo);
       _loadingProgress = null;
       _lastException = null;
+      _lastChunkUiUpdate = null;
+      _lastChunkBytesShown = null;
       _frameNumber = _frameNumber == null ? 0 : _frameNumber! + 1;
       _wasSynchronouslyLoaded = _wasSynchronouslyLoaded | synchronousCall;
     });
   }
 
   void _handleImageChunk(ImageChunkEvent event) {
+    // Network comics fire many chunk events; setState every one stalls scroll.
+    // Keep the spinner moving, but at most ~8 Hz or on big byte jumps.
+    final now = DateTime.now();
+    final last = _lastChunkUiUpdate;
+    final lastBytes = _lastChunkBytesShown ?? 0;
+    final jumped = event.cumulativeBytesLoaded - lastBytes >= 64 * 1024;
+    if (last != null &&
+        now.difference(last).inMilliseconds < 120 &&
+        !jumped) {
+      _loadingProgress = event;
+      return;
+    }
+    _lastChunkUiUpdate = now;
+    _lastChunkBytesShown = event.cumulativeBytesLoaded;
     setState(() {
       _loadingProgress = event;
       _lastException = null;
@@ -350,7 +369,8 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
           child: result,
         ),
       );
-      return result;
+      // Keep neighboring page paints from invalidating this one during scroll.
+      return RepaintBoundary(child: result);
     } else {
       // build progress
       return SizedBox(

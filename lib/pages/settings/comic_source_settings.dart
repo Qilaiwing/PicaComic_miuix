@@ -178,29 +178,6 @@ class _ComicSourceSettingsState extends State<ComicSourceSettings> {
     }
   }
 
-  static void update(ComicSource source) async {
-    ComicSource.sources.remove(source);
-    if (!source.url.isURL) {
-      showToast(message: "Invalid url config");
-    }
-    bool cancel = false;
-    var controller = showLoadingDialog(App.globalContext!,
-        onCancel: () => cancel = true, barrierDismissible: false);
-    try {
-      var res = await logDio().get<String>(source.url,
-          options: Options(responseType: ResponseType.plain));
-      if (cancel) return;
-      controller.close();
-      await ComicSourceParser()
-          .parse(res.data!, source.filePath, replaceKey: source.key);
-      await File(source.filePath).writeAsString(res.data!);
-    } catch (e) {
-      if (cancel) return;
-      showToast(message: e.toString());
-    }
-    await ComicSource.reload();
-    MyApp.updater?.call();
-  }
 
   Widget buildCard(BuildContext context) {
     return MiuixSettingsCard(
@@ -756,9 +733,10 @@ class _SourceExpandCardState extends State<_SourceExpandCard> {
 
   String get summary {
     final parts = <String>[];
-    parts.add(enabled ? "已启用".tl : "已停用".tl);
-    if (source.account != null) {
-      parts.add(source.isLogin ? "已登录".tl : "未登录".tl);
+    // 启用/停用；仅已登录时追加「 · 已登录」；未登录不显示登录态
+    parts.add(enabled ? "启用".tl : "停用".tl);
+    if (source.account != null && source.isLogin) {
+      parts.add("已登录".tl);
     }
     if (!isBuiltIn && source.version.isNotEmpty) {
       parts.add("v${source.version}");

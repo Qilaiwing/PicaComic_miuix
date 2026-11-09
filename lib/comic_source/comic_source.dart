@@ -70,12 +70,67 @@ class ComicSource {
       disabledJsSources.firstWhereOrNull((e) => e.key.hashCode == key) ??
       builtIn.firstWhereOrNull((e) => e.key.hashCode == key);
 
-  /// 按 key 查找显示名称（含已停用的源），找不到返回 null
-  static String? displayNameOf(String key) {
-    var s = find(key) ??
+  /// 历史/别名 key → 规范 ComicSource.key（图片收藏 id 等曾用过不同大小写）
+  static const Map<String, String> keyAliases = {
+    "htManga": "htmanga",
+  };
+
+  /// 将可能的别名 / 大小写差异规范成 ComicSource.key；无法识别则原样返回
+  static String canonicalizeKey(String key) {
+    final aliased = keyAliases[key];
+    if (aliased != null) return aliased;
+    final lower = key.toLowerCase();
+    for (final e in keyAliases.entries) {
+      if (e.key.toLowerCase() == lower || e.value.toLowerCase() == lower) {
+        return e.value;
+      }
+    }
+    ComicSource? hit(bool Function(ComicSource s) test) =>
+        sources.firstWhereOrNull(test) ??
+        disabledJsSources.firstWhereOrNull(test) ??
+        builtIn.firstWhereOrNull(test);
+    final byCase = hit((s) => s.key.toLowerCase() == lower);
+    return byCase?.key ?? key;
+  }
+
+  static ComicSource? findIncludingDisabled(String key) {
+    final canon = canonicalizeKey(key);
+    return find(canon) ??
+        disabledJsSources.firstWhereOrNull((e) => e.key == canon) ??
+        builtIn.firstWhereOrNull((e) => e.key == canon) ??
+        find(key) ??
         disabledJsSources.firstWhereOrNull((e) => e.key == key) ??
-        builtIn.firstWhereOrNull((e) => e.key == key);
-    return s?.name.tl;
+        builtIn.firstWhereOrNull((e) => e.key == key) ??
+        sources.firstWhereOrNull(
+            (e) => e.key.toLowerCase() == key.toLowerCase()) ??
+        disabledJsSources.firstWhereOrNull(
+            (e) => e.key.toLowerCase() == key.toLowerCase()) ??
+        builtIn.firstWhereOrNull(
+            (e) => e.key.toLowerCase() == key.toLowerCase());
+  }
+
+  /// 按 key 查找显示名称（含已停用的源、别名与大小写差异），找不到返回 null
+  static String? displayNameOf(String key) {
+    return findIncludingDisabled(key)?.name.tl;
+  }
+
+  /// 从 `sourceKey-comicId` 复合 id 取出源 key（最长前缀匹配，兼容 comicId 含 `-`）
+  static String sourceKeyFromCompoundId(String id) {
+    final known = <String>{
+      ...sources.map((e) => e.key),
+      ...disabledJsSources.map((e) => e.key),
+      ...builtIn.map((e) => e.key),
+      ...keyAliases.keys,
+      ...keyAliases.values,
+    }.toList()
+      ..sort((a, b) => b.length.compareTo(a.length));
+    for (final k in known) {
+      if (id == k || id.startsWith("$k-")) {
+        return k;
+      }
+    }
+    final i = id.indexOf("-");
+    return i <= 0 ? id : id.substring(0, i);
   }
 
   static Future<void> init() async {

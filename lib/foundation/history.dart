@@ -69,9 +69,9 @@ final class HistoryType {
 
   ComicSource? get comicSource {
     if (value >= 0 && value <= 5) {
-      return ComicSource.find(name);
+      return ComicSource.findIncludingDisabled(name);
     } else {
-      return ComicSource.fromIntKey(value);
+      return ComicSource.fromIntKeyIncludingDisabled(value);
     }
   }
 }

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:pica_comic/comic_source/comic_source.dart';
 import 'package:pica_comic/network/base_comic.dart';
 import 'package:pica_comic/network/res.dart';
@@ -101,11 +101,15 @@ class _MultiFolderFavoritesPageState extends State<_MultiFolderFavoritesPage> {
   Widget build(BuildContext context) {
     if (_loading) {
       loadPage();
-      return const Center(
-        child: MiuixCircularProgressIndicator(),
+      return const TopInsetPadding(
+        child: Center(
+          child: MiuixCircularProgressIndicator(),
+        ),
       );
     } else if (_errorMessage != null) {
-      return NetworkError(message: _errorMessage!, withAppbar: false,);
+      return TopInsetPadding(
+        child: NetworkError(message: _errorMessage!, withAppbar: false,),
+      );
     } else {
       var length = folders!.length;
       if (widget.data.allFavoritesId != null) length++;
@@ -113,6 +117,7 @@ class _MultiFolderFavoritesPageState extends State<_MultiFolderFavoritesPage> {
 
       return SmoothCustomScrollView(
         slivers: [
+          const TopInsetSliver(),
           SliverGridViewWithFixedItemHeight(
             delegate:
                 SliverChildBuilderDelegate(childCount: length, (context, i) {

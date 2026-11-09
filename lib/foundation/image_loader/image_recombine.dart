@@ -79,7 +79,9 @@ Future<Uint8List> _segmentationPicture(_RecombinationTask data) async {
     y += currBlockHeight;
   }
 
-  return image.encodeJpg(desImg);
+    // Lossless re-encode (PNG). Previous encodeJpg was lossy even at q=100.
+  // Tradeoff: PNG cache files are larger on disk/memory than JPEG.
+  return image.encodePng(desImg);
 }
 
 Future<Uint8List> _recombineImageAndWriteFile(_RecombinationTask data) async {
@@ -109,103 +111,110 @@ class _RecombinationTask {
       [this.savePath]);
 }
 
-class JmRecombine{
-  static Isolate? _isolate;
+class _JmWorker {
+  Isolate? isolate;
+  ReceivePort? receivePort;
+  ReceivePort? errorPort;
+  SendPort? sendPort;
+  _RecombinationTask? current;
+  bool starting = false;
+}
 
-  static ReceivePort? _receivePort;
-
-  static ReceivePort? _errorPort;
-
-  static SendPort? _sendPort;
-
+/// JM recombine pool (2 isolates) so consecutive pages can descramble in parallel.
+class JmRecombine {
+  static const int poolSize = 2;
+  static final List<_JmWorker> _workers = [];
   static final List<_RecombinationTask> _tasks = [];
 
-  static _RecombinationTask? _current;
-
   static Future<Uint8List> recombineImage(Uint8List imgData, String epsId,
-      String scrambleId, String bookId, String savePath) async{
+      String scrambleId, String bookId, String savePath) async {
     Completer<Uint8List> completer = Completer();
     _RecombinationTask task =
-      _RecombinationTask(imgData, epsId, scrambleId, bookId, completer, savePath);
+        _RecombinationTask(imgData, epsId, scrambleId, bookId, completer, savePath);
     _tasks.add(task);
-    if(_isolate == null && _receivePort == null){
-      _receivePort = ReceivePort();
-      await _start();
-    }
-    _pushTask();
+    await _ensurePool();
+    _dispatch();
     return completer.future;
   }
 
-  static void _pushTask(){
-    if(_sendPort != null && _current == null && _tasks.isNotEmpty){
-      _current = _tasks.removeAt(0);
-      _sendPort!.send(_current!.removeCompleter());
+  static Future<void> _ensurePool() async {
+    while (_workers.length < poolSize) {
+      final w = _JmWorker();
+      _workers.add(w);
+      await _startWorker(w);
     }
   }
 
-  static Future<void> _start() async{
-    _errorPort = ReceivePort();
-    _isolate = await Isolate.spawn(_run, _receivePort!.sendPort,
-        onError: _errorPort!.sendPort, debugName: "JmRecombine");
-    _listen();
+  static Future<void> _startWorker(_JmWorker w) async {
+    if (w.starting) return;
+    w.starting = true;
+    w.receivePort = ReceivePort();
+    w.errorPort = ReceivePort();
+    w.isolate = await Isolate.spawn(_run, w.receivePort!.sendPort,
+        onError: w.errorPort!.sendPort, debugName: "JmRecombine");
+    w.starting = false;
+    _listenWorker(w);
   }
 
-  static void _listen(){
-    _receivePort!.listen((message) {
-      if (message is SendPort){
-        _sendPort = message;
-        _pushTask();
-      } else if(message is Uint8List) {
-        _current!.completer!.complete(message);
-        _current = null;
-        _pushTask();
-      } else if(message is Exception) {
-        _current!.completer!.completeError(message);
-        _current = null;
-        _pushTask();
+  static void _dispatch() {
+    for (final w in _workers) {
+      if (w.sendPort != null && w.current == null && _tasks.isNotEmpty) {
+        w.current = _tasks.removeAt(0);
+        w.sendPort!.send(w.current!.removeCompleter());
+      }
+    }
+  }
+
+  static void _listenWorker(_JmWorker w) {
+    w.receivePort!.listen((message) {
+      if (message is SendPort) {
+        w.sendPort = message;
+        _dispatch();
+      } else if (message is Uint8List) {
+        w.current?.completer?.complete(message);
+        w.current = null;
+        _dispatch();
+      } else if (message is Exception) {
+        w.current?.completer?.completeError(message);
+        w.current = null;
+        _dispatch();
       }
     });
 
-    _errorPort!.listen((message) {
+    w.errorPort!.listen((message) {
       log("Receive error from Isolate#JmRecombine:\n$message", "Image",
           LogLevel.error);
-      _handleError();
+      _handleWorkerError(w);
     });
   }
 
-  static _handleError() async{
-    _receivePort?.close();
-    _errorPort?.close();
-    _isolate = null;
-    _sendPort = null;
-    if(_current != null) {
-      _tasks.add(_current!);
-      _current = null;
+  static Future<void> _handleWorkerError(_JmWorker w) async {
+    w.receivePort?.close();
+    w.errorPort?.close();
+    w.isolate = null;
+    w.sendPort = null;
+    if (w.current != null) {
+      _tasks.insert(0, w.current!);
+      w.current = null;
     }
     await Future.delayed(const Duration(milliseconds: 50));
-    if(_isolate == null && _receivePort == null){
-      _receivePort = ReceivePort();
-      await _start();
-    } else {
-      _pushTask();
-    }
+    await _startWorker(w);
+    _dispatch();
   }
 
   static void _run(SendPort port) {
-    _receivePort = ReceivePort();
-    _receivePort!.listen((message) async{
-      if (message is _RecombinationTask){
-        _RecombinationTask task = message;
+    final rp = ReceivePort();
+    rp.listen((message) async {
+      if (message is _RecombinationTask) {
         try {
-          Uint8List bytes = await _recombineImageAndWriteFile(task);
+          Uint8List bytes = await _recombineImageAndWriteFile(message);
           port.send(bytes);
-        }
-        catch(e){
+        } catch (e) {
           port.send(Exception(e.toString()));
         }
       }
     });
-    port.send(_receivePort!.sendPort);
+    port.send(rp.sendPort);
   }
 }
 

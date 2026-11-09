@@ -5,6 +5,7 @@ import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -21,6 +22,7 @@ import 'package:pica_comic/foundation/local_favorites.dart';
 import 'package:pica_comic/network/base_comic.dart';
 import 'package:pica_comic/network/cloudflare.dart';
 import 'package:pica_comic/network/res.dart';
+import 'package:pica_comic/network/update.dart';
 import 'package:pica_comic/pages/comic_page.dart';
 import 'package:pica_comic/pages/explore_page.dart';
 import 'package:pica_comic/pages/category_page.dart';
@@ -40,7 +42,6 @@ import 'miuix_scaffold.dart';
 export 'miuix_scaffold.dart';
 
 import '../base.dart';
-import 'package:sliver_tools/sliver_tools.dart';
 import '../foundation/ui_mode.dart';
 
 part 'sticky_header.dart';

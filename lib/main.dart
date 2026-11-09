@@ -328,7 +328,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               ),
               pageTransitionsTheme: const PageTransitionsTheme(
                 builders: {
-                  TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+                  TargetPlatform.android: ZoomPageTransitionsBuilder(),
                   TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
                 },
               ),
@@ -373,7 +373,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               ),
               pageTransitionsTheme: const PageTransitionsTheme(
                 builders: {
-                  TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+                  TargetPlatform.android: ZoomPageTransitionsBuilder(),
                   TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
                 },
               ),

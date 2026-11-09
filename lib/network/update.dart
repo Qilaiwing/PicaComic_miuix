@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:pica_comic/base.dart';
 import 'package:pica_comic/foundation/def.dart';
 import 'package:pica_comic/foundation/log.dart';
@@ -70,6 +74,8 @@ Future<String> getLatestVersion() async {
         _updateInfo = data["body"]?.toString();
         final tag = data["tag_name"]?.toString();
         if (tag != null && tag.isNotEmpty) {
+          _latestTag = tag;
+          _latestAssets = _parseAssets(data["assets"]);
           LogManager.addLog(
               LogLevel.info, "Update", "latest tag=$tag (api)");
           return _stripV(tag);
@@ -89,6 +95,8 @@ Future<String> getLatestVersion() async {
     final m = RegExp(r'/releases/tag/([^/?#]+)').firstMatch(loc);
     if (m != null) {
       final tag = Uri.decodeComponent(m.group(1)!);
+      _latestTag = tag;
+      _latestAssets = null;
       LogManager.addLog(
           LogLevel.info, "Update", "latest tag=$tag (html redirect)");
       if (_updateInfo == null) {
@@ -108,6 +116,8 @@ Future<String> getLatestVersion() async {
   try {
     final tag = await _latestTagFromAtom();
     if (tag != null) {
+      _latestTag = tag;
+      _latestAssets = null;
       LogManager.addLog(
           LogLevel.info, "Update", "latest tag=$tag (atom)");
       return _stripV(tag);
@@ -210,6 +220,33 @@ Future<bool?> checkUpdate() async {
   }
 }
 
+/// 用缓存的待更新信息填充内存态, 以便弹窗内下载仍能工作。
+void hydratePendingUpdate({
+  required String version,
+  String? tag,
+  String? notes,
+}) {
+  _latestVersion = version;
+  if (tag != null && tag.isNotEmpty) {
+    _latestTag = tag.startsWith("v") || tag.startsWith("V") ? tag : "v$tag";
+  } else {
+    _latestTag = "v$version";
+  }
+  if (notes != null && notes.trim().isNotEmpty) {
+    _updateInfo = notes;
+  }
+  _latestAssets = null;
+}
+
+/// 清除内存中的最新 release 缓存 (本机已追上或不再有更新时)。
+void clearPendingUpdateMemory() {
+  _latestVersion = null;
+  _latestTag = null;
+  _updateInfo = null;
+  _latestAssets = null;
+}
+
+
 bool compareSemVer(String ver1, String ver2) {
   final a = _parseAppTag(ver1);
   final b = _parseAppTag(ver2);
@@ -243,5 +280,212 @@ String? _latestVersion;
 String? get latestVersion => _latestVersion;
 
 Future<String> getDownloadUrl() async {
+  if (_latestTag != null) {
+    return "https://github.com/Qilaiwing/PicaComic_miuix/releases/tag/${Uri.encodeComponent(_latestTag!)}";
+  }
   return "https://github.com/Qilaiwing/PicaComic_miuix/releases/latest";
+}
+
+// ---------------------------------------------------------------------------
+// 当前版本更新日志 / 应用内下载安装
+// ---------------------------------------------------------------------------
+
+const _repo = "Qilaiwing/PicaComic_miuix";
+
+String? _latestTag;
+List<ReleaseAsset>? _latestAssets;
+
+/// 最近一次检查得到的 release tag (含 v 前缀)。
+String? get latestTag => _latestTag;
+
+class ReleaseAsset {
+  final String name;
+  final String url;
+  final int size;
+
+  const ReleaseAsset(this.name, this.url, this.size);
+}
+
+List<ReleaseAsset>? _parseAssets(dynamic raw) {
+  if (raw is! List) return null;
+  final res = <ReleaseAsset>[];
+  for (final a in raw) {
+    if (a is! Map) continue;
+    final name = a["name"]?.toString();
+    final url = a["browser_download_url"]?.toString();
+    if (name == null || url == null) continue;
+    res.add(ReleaseAsset(name, url, (a["size"] as num?)?.toInt() ?? 0));
+  }
+  return res;
+}
+
+/// 拉取已安装版本 (appVersion) 对应 release 的更新日志。
+/// 返回 (tag, notes)；找不到对应 tag 时 notes 为 null。
+Future<({String tag, String? notes, bool found})> getCurrentVersionNotes() async {
+  const tag = "v$appVersion";
+  final dio = _updateDio();
+  try {
+    final res = await dio.get(
+      "https://api.github.com/repos/$_repo/releases/tags/${Uri.encodeComponent(tag)}",
+      options: Options(
+        responseType: ResponseType.json,
+        headers: {"Accept": "application/vnd.github+json"},
+        validateStatus: (c) => c != null && c < 500,
+      ),
+    );
+    if (res.statusCode == 200 && res.data is Map) {
+      final body = (res.data as Map)["body"]?.toString().replaceAll('\r\n', '\n').trim();
+      return (tag: tag, notes: (body == null || body.isEmpty) ? null : body, found: true);
+    }
+    if (res.statusCode == 404) {
+      return (tag: tag, notes: null, found: false);
+    }
+  } catch (e) {
+    LogManager.addLog(LogLevel.warning, "Update", "current notes api failed: $e");
+  }
+  // 回退: atom feed 里找同名 tag 的条目
+  try {
+    final res = await dio.get(_githubAtom);
+    final body = res.data?.toString() ?? "";
+    for (final m in RegExp(r'<entry>([\s\S]*?)</entry>').allMatches(body)) {
+      final block = m.group(1)!;
+      final link = RegExp(r'/releases/tag/([^"]+)"').firstMatch(block);
+      if (link == null || Uri.decodeComponent(link.group(1)!) != tag) continue;
+      final content = RegExp(r'<content[^>]*>([\s\S]*?)</content>').firstMatch(block);
+      if (content == null) return (tag: tag, notes: null, found: true);
+      final text = _htmlToMarkdown(content.group(1)!
+          .replaceAll('&lt;', '<')
+          .replaceAll('&gt;', '>')
+          .replaceAll('&quot;', '"')
+          .replaceAll('&#39;', "'")
+          .replaceAll('&amp;', '&'));
+      return (tag: tag, notes: text.isEmpty ? null : text, found: true);
+    }
+    return (tag: tag, notes: null, found: false);
+  } catch (e) {
+    LogManager.addLog(LogLevel.warning, "Update", "current notes atom failed: $e");
+    rethrow;
+  }
+}
+
+String getReleasePageUrl([String? tag]) => tag == null
+    ? "https://github.com/$_repo/releases/latest"
+    : "https://github.com/$_repo/releases/tag/${Uri.encodeComponent(tag)}";
+
+const _deviceChannel = MethodChannel("com.picacomic_miuix/device");
+const _installChannel = MethodChannel("com.picacomic_miuix/installer");
+
+Future<String> _deviceAbi() async {
+  try {
+    return (await _deviceChannel.invokeMethod<String>("abi")) ?? "arm64-v8a";
+  } catch (_) {
+    return "arm64-v8a";
+  }
+}
+
+/// 从 HTML 的 expanded_assets 页面解析 apk (API 限流时的回退)。
+Future<List<ReleaseAsset>> _assetsFromHtml(String tag) async {
+  final dio = _updateDio();
+  final res = await dio.get(
+      "https://github.com/$_repo/releases/expanded_assets/${Uri.encodeComponent(tag)}");
+  final body = res.data?.toString() ?? "";
+  final list = <ReleaseAsset>[];
+  for (final m in RegExp(r'href="(/[^"]+/releases/download/[^"]+\.apk)"')
+      .allMatches(body)) {
+    final path = m.group(1)!;
+    list.add(ReleaseAsset(
+        Uri.decodeComponent(path.split('/').last), "https://github.com$path", 0));
+  }
+  return list;
+}
+
+/// 为当前设备选择最新 release 的 apk: 优先匹配 ABI, 其次 arm64-v8a, 最后任意 .apk。
+Future<ReleaseAsset?> pickLatestApk() async {
+  final tag = _latestTag;
+  var assets = _latestAssets;
+  if ((assets == null || assets.isEmpty) && tag != null) {
+    try {
+      assets = await _assetsFromHtml(tag);
+    } catch (e) {
+      LogManager.addLog(LogLevel.warning, "Update", "assets html failed: $e");
+    }
+  }
+  final apks = (assets ?? const <ReleaseAsset>[])
+      .where((a) => a.name.toLowerCase().endsWith(".apk"))
+      .toList();
+  if (apks.isEmpty) return null;
+  final abi = (await _deviceAbi()).toLowerCase();
+  for (final want in [abi, "arm64-v8a"]) {
+    for (final a in apks) {
+      if (a.name.toLowerCase().contains(want)) return a;
+    }
+  }
+  final universal = apks.where((a) => a.name.toLowerCase().contains("universal"));
+  if (universal.isNotEmpty) return universal.first;
+  return apks.first;
+}
+
+/// 下载 apk 到应用缓存目录 update/ 下, 返回文件路径。
+/// 走 app 的 Dio 适配器, 因此会遵循全局代理设置。
+Future<String> downloadApk(
+  ReleaseAsset asset, {
+  required void Function(int received, int total) onProgress,
+  CancelToken? cancelToken,
+}) async {
+  final dir = Directory("${(await getTemporaryDirectory()).path}/update");
+  if (dir.existsSync()) {
+    // 清掉旧安装包
+    for (final f in dir.listSync()) {
+      try {
+        f.deleteSync(recursive: true);
+      } catch (_) {}
+    }
+  } else {
+    dir.createSync(recursive: true);
+  }
+  final safeName = asset.name.replaceAll(RegExp(r'[^\w.\-]'), '_');
+  final path = "${dir.path}/$safeName";
+  final tmp = "$path.part";
+  final dio = logDio(BaseOptions(
+    connectTimeout: const Duration(seconds: 20),
+    receiveTimeout: const Duration(seconds: 60),
+    headers: {"User-Agent": "PicaComic-MIUIX/$appVersion"},
+    followRedirects: true,
+    maxRedirects: 8,
+  ));
+  try {
+    await dio.download(asset.url, tmp,
+        cancelToken: cancelToken,
+        deleteOnError: true,
+        onReceiveProgress: (r, t) => onProgress(r, t > 0 ? t : asset.size));
+  } catch (e) {
+    try {
+      File(tmp).deleteSync();
+    } catch (_) {}
+    rethrow;
+  }
+  final f = File(tmp);
+  if (asset.size > 0 && f.lengthSync() != asset.size) {
+    f.deleteSync();
+    throw StateError("下载不完整");
+  }
+  f.renameSync(path);
+  return path;
+}
+
+/// 调起系统安装器。返回 "ok" / "need_permission" / 错误信息。
+Future<String> installApk(String path) async {
+  try {
+    final r = await _installChannel.invokeMethod<String>("install", {"path": path});
+    return r ?? "ok";
+  } on PlatformException catch (e) {
+    return e.code == "need_permission" ? "need_permission" : (e.message ?? e.code);
+  }
+}
+
+/// 打开「安装未知应用」权限设置页。
+Future<void> openInstallPermissionSettings() async {
+  try {
+    await _installChannel.invokeMethod("permission");
+  } catch (_) {}
 }

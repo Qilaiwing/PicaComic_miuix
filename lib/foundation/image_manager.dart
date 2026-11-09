@@ -44,8 +44,38 @@ class ImageManager {
 
   static bool get haveTask => loadingItems.isNotEmpty;
 
+  static int get loadingCount => loadingItems.length;
+
+  static final Map<String, CancelToken> _cancelTokens = {};
+
   static void clearTasks() {
     loadingItems.clear();
+  }
+
+  /// Cancel in-flight image downloads (reader leave). Does not touch download
+  /// manager's own CancelTokens; only ImageManager-owned requests.
+  static void cancelTasks() {
+    for (final t in _cancelTokens.values) {
+      if (!t.isCancelled) {
+        t.cancel("leave reader");
+      }
+    }
+    _cancelTokens.clear();
+    loadingItems.clear();
+  }
+
+  CancelToken _tokenFor(String key) {
+    final existing = _cancelTokens[key];
+    if (existing != null && !existing.isCancelled) {
+      return existing;
+    }
+    final t = CancelToken();
+    _cancelTokens[key] = t;
+    return t;
+  }
+
+  void _clearToken(String key) {
+    _cancelTokens.remove(key);
   }
 
   ImageManager._create();
@@ -60,6 +90,7 @@ class ImageManager {
       [Map<String, String>? headers]) async* {
     await wait(url);
     loadingItems[url] = DownloadProgress(0, 1, url, "");
+    final cancelToken = _tokenFor(url);
     CachingFile? caching;
 
     try {
@@ -69,6 +100,7 @@ class ImageManager {
         yield DownloadProgress(
             1, 1, url, cache, null, CacheManager().getType(key));
         loadingItems.remove(url);
+        _clearToken(url);
         return;
       }
 
@@ -96,6 +128,7 @@ class ImageManager {
         }
       }
       var dioRes = await dio.get<ResponseBody>(realUrl,
+          cancelToken: cancelToken,
           options:
               Options(responseType: ResponseType.stream, headers: headers));
       if (dioRes.data == null) {
@@ -143,6 +176,7 @@ class ImageManager {
         ehgtLoading--;
       }
       loadingItems.remove(url);
+      _clearToken(url);
     }
   }
 
@@ -155,6 +189,7 @@ class ImageManager {
     // check whether this image is loading
     await wait(cacheKey);
     loadingItems[cacheKey] = DownloadProgress(0, 1, cacheKey, "");
+    final cancelToken = _tokenFor(cacheKey);
 
     CachingFile? caching;
 
@@ -165,6 +200,7 @@ class ImageManager {
         yield DownloadProgress(
             1, 1, key, cache, null, CacheManager().getType(key));
         loadingItems.remove(key);
+        _clearToken(key);
         return;
       }
 
@@ -269,6 +305,7 @@ class ImageManager {
               throw "empty url";
             }
             res = await dio.get<ResponseBody>(image,
+                cancelToken: cancelToken,
                 options: Options(responseType: ResponseType.stream));
             if (res.data!.headers["Content-Type"]?[0] ==
                     "text/html; charset=UTF-8" ||
@@ -369,6 +406,7 @@ class ImageManager {
               throw "empty url";
             }
             res = await dio.get<ResponseBody>(image,
+                cancelToken: cancelToken,
                 options: Options(responseType: ResponseType.stream));
             if (res.data!.headers["Content-Type"]?[0] ==
                     "text/html; charset=UTF-8" ||
@@ -447,6 +485,7 @@ class ImageManager {
       rethrow;
     } finally {
       loadingItems.remove(cacheKey);
+      _clearToken(cacheKey);
     }
   }
 
@@ -457,6 +496,7 @@ class ImageManager {
       HitomiFile image, String galleryId) async* {
     await wait(image.hash);
     loadingItems[image.hash] = DownloadProgress(0, 1, image.hash, "");
+    final cancelToken = _tokenFor(image.hash);
     CachingFile? caching;
 
     try {
@@ -466,6 +506,7 @@ class ImageManager {
         yield DownloadProgress(
             1, 1, key, cache, null, CacheManager().getType(key));
         loadingItems.remove(key);
+        _clearToken(key);
         return;
       }
 
@@ -489,6 +530,7 @@ class ImageManager {
       };
 
       var res = await dio.get<ResponseBody>(url,
+          cancelToken: cancelToken,
           options: Options(responseType: ResponseType.stream));
       var stream = res.data!.stream;
       int? expectedBytes;
@@ -528,6 +570,7 @@ class ImageManager {
       rethrow;
     } finally {
       loadingItems.remove(image.hash);
+      _clearToken(image.hash);
     }
   }
 
@@ -540,6 +583,7 @@ class ImageManager {
     final urlWithoutParam = url.replaceAll(RegExp(r"\?.+"), "");
     await wait(urlWithoutParam);
     loadingItems[urlWithoutParam] = DownloadProgress(0, 1, url, "");
+    final cancelToken = _tokenFor(urlWithoutParam);
     CachingFile? caching;
 
     try {
@@ -547,7 +591,8 @@ class ImageManager {
       var cache = await CacheManager().findCache(key);
       if (cache != null) {
         yield DownloadProgress(1, 1, url, cache);
-        loadingItems.remove(url);
+        loadingItems.remove(urlWithoutParam);
+        _clearToken(urlWithoutParam);
         return;
       }
 
@@ -563,6 +608,7 @@ class ImageManager {
       try {
         var res = await dio.get<ResponseBody>(
             url,
+            cancelToken: cancelToken,
             options: Options(
                 responseType: ResponseType.stream,
                 headers: getImgHeaders()
@@ -593,6 +639,7 @@ class ImageManager {
       if (url.split('.').last != "gif") {
         bytes = await startRecombineAndWriteImage(
             Uint8List.fromList(bytes), epsId, scrambleId, bookId, savePath);
+        ext = "png";
       }
       await cachingFile.writeBytes(bytes);
       await cachingFile.close();
@@ -617,6 +664,7 @@ class ImageManager {
       rethrow;
     } finally {
       loadingItems.remove(urlWithoutParam);
+      _clearToken(urlWithoutParam);
     }
   }
 
@@ -625,11 +673,13 @@ class ImageManager {
     var cacheKey = "$sourceKey$comicId$epId$url";
     await wait(cacheKey);
     loadingItems[cacheKey] = DownloadProgress(0, 1, cacheKey, "");
+    final cancelToken = _tokenFor(cacheKey);
 
     var cache = await CacheManager().findCache(cacheKey);
     if (cache != null) {
       yield DownloadProgress(1, 1, cacheKey, cache);
       loadingItems.remove(cacheKey);
+      _clearToken(cacheKey);
       return;
     }
 
@@ -652,6 +702,7 @@ class ImageManager {
 
       var res = await dio.request<ResponseBody>(config['url'] ?? url,
           data: config['data'],
+          cancelToken: cancelToken,
           options: Options(
               method: config['method'] ?? 'GET',
               headers: config['headers'] ?? {'user-agent': webUA},
@@ -719,6 +770,7 @@ class ImageManager {
       rethrow;
     } finally {
       loadingItems.remove(cacheKey);
+      _clearToken(cacheKey);
     }
   }
 
@@ -740,11 +792,13 @@ class ImageManager {
     var cacheKey = "$sourceKey$url";
     await wait(cacheKey);
     loadingItems[cacheKey] = DownloadProgress(0, 1, cacheKey, "");
+    final cancelToken = _tokenFor(cacheKey);
 
     var cache = await CacheManager().findCache(cacheKey);
     if (cache != null) {
       yield DownloadProgress(1, 1, cacheKey, cache);
       loadingItems.remove(cacheKey);
+      _clearToken(cacheKey);
       return;
     }
 
@@ -769,6 +823,7 @@ class ImageManager {
 
       var res = await dio.request<ResponseBody>(config['url'] ?? url,
           data: config['data'],
+          cancelToken: cancelToken,
           options: Options(
               method: config['method'] ?? 'GET',
               headers: config['headers'] ?? {'user-agent': webUA},
@@ -824,6 +879,7 @@ class ImageManager {
       rethrow;
     } finally {
       loadingItems.remove(cacheKey);
+      _clearToken(cacheKey);
     }
   }
 

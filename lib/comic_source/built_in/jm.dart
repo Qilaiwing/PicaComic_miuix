@@ -19,7 +19,7 @@ import 'package:pica_comic/pages/reader/comic_reading_page.dart';
 
 import '../../../network/jm_network/headers.dart';
 
-final jm = ComicSource.named(
+final ComicSource jm = ComicSource.named(
   name: '禁漫天堂',
   key: 'jm',
   filePath: 'built-in',
@@ -181,9 +181,9 @@ final jm = ComicSource.named(
     login: (account, pwd) async {
       var res = await jmNetwork.login(account, pwd);
       var a = <String>[account, pwd];
-      var source = ComicSource.find('jm')!;
-      source.data['account'] = a;
-      source.saveData();
+      // 停用后不在 ComicSource.sources 中，find 会返回 null；jm 自身即内置源实例
+      jm.data['account'] = a;
+      jm.saveData();
       return res;
     },
     logout: () {
@@ -192,7 +192,8 @@ final jm = ComicSource.named(
     infoItems: [
       AccountInfoItem(
         title: "用户名",
-        data: () => ComicSource.find('jm')!.data['name'] ?? '',
+        // 停用时 find('jm') 为 null，直接用内置实例避免 Null check
+        data: () => jm.data['name'] ?? '',
       ),
     ],
   ),

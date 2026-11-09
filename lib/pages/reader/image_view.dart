@@ -33,6 +33,9 @@ extension ImageExt on ComicReadingPage {
         itemPositionsListener: logic.itemScrollListener,
         itemCount: logic.urls.length,
         addSemanticIndexes: false,
+        // Keep ~1.5 screens of offscreen pages built so continuous swipe
+        // does not hitch on create/decode of the next item.
+        minCacheExtent: MediaQuery.of(context).size.height * 1.5,
         scrollController: logic.scrollController,
         scrollBehavior: const MaterialScrollBehavior()
             .copyWith(scrollbars: false, dragDevices: _kTouchLikeDeviceTypes),
@@ -53,7 +56,8 @@ extension ImageExt on ComicReadingPage {
 
           ImageProvider image = createImageProvider(type, logic, index, target);
           return ComicImage(
-            filterQuality: FilterQuality.medium,
+            // low: continuous mode has several full-width pages on GPU at once.
+            filterQuality: FilterQuality.low,
             image: image,
             width: imageWidth,
             height: imageWidth * 1.2,
@@ -74,6 +78,9 @@ extension ImageExt on ComicReadingPage {
         reverse: appdata.settings[9] == "2",
         scrollDirection:
             appdata.settings[9] != "3" ? Axis.horizontal : Axis.vertical,
+        // Keep prev/next page mounted so swipe does not hitch on first build.
+        allowImplicitScrolling: true,
+        gaplessPlayback: true,
         itemCount: logic.urls.length + 2,
         builder: (BuildContext context, int index) {
           ImageProvider? imageProvider;
@@ -81,7 +88,6 @@ extension ImageExt on ComicReadingPage {
             imageProvider = createImageProvider(type, logic, index - 1, target);
           } else {
             return PhotoViewGalleryPageOptions.customChild(
-                scaleStateController: PhotoViewScaleStateController(),
                 child: const SizedBox(),);
           }
 
@@ -101,6 +107,7 @@ extension ImageExt on ComicReadingPage {
           logic.photoViewControllers[index] ??= PhotoViewController();
 
           return PhotoViewGalleryPageOptions(
+            // Keep medium: full-screen flip pages look soft with FilterQuality.low.
             filterQuality: FilterQuality.medium,
             imageProvider: imageProvider,
             fit: getFit(),
@@ -151,8 +158,6 @@ extension ImageExt on ComicReadingPage {
                 ),
               );
             },
-            heroAttributes:
-                PhotoViewHeroAttributes(tag: "$index/${logic.urls.length}"),
           );
         },
         pageController: logic.pageController,
@@ -184,7 +189,9 @@ extension ImageExt on ComicReadingPage {
             logic.jumpToNextChapter();
           } else {
             logic.index = i;
-            logic.update();
+            // Only refresh page-info / toolbars. A full update() rebuilds the
+            // whole PhotoViewGallery mid-swipe and tanks frame rate.
+            logic.update(["ToolBar"]);
           }
         },
       );
@@ -223,6 +230,8 @@ extension ImageExt on ComicReadingPage {
         key: Key(logic.readingMethod.index.toString()),
         backgroundDecoration: decoration,
         itemCount: calcItemCount(),
+        allowImplicitScrolling: true,
+        gaplessPlayback: true,
         reverse: logic.readingMethod == ReadingMethod.twoPageReversed,
         builder: (BuildContext context, int index) {
           if (index == 0 || index == calcItemCount() - 1) {
@@ -287,7 +296,7 @@ extension ImageExt on ComicReadingPage {
             logic.index = logic.singlePageForFirstScreen
                 ? (i * 2 - 2).clamp(1, logic.urls.length)
                 : i * 2 - 1;
-            logic.update();
+            logic.update(["ToolBar"]);
           }
         },
       );
@@ -438,22 +447,25 @@ extension ImageExt on ComicReadingPage {
   /// preload image
   void precacheComicImage(ComicReadingPageLogic logic, BuildContext context,
       int index, String target) {
-    if (logic.requestedLoadingItems.length != logic.length) {
+    if (logic.requestedLoadingItems.length != logic.length + 1) {
       logic.requestedLoadingItems = List.filled(logic.length + 1, false);
     }
     int precacheNum = int.parse(appdata.settings[28]) + index;
     for (; index < precacheNum; index++) {
-      if (index >= logic.urls.length || logic.requestedLoadingItems[index]) {
-        return;
-      }
+      if (index >= logic.urls.length) return;
+      if (logic.requestedLoadingItems[index]) continue;
+      logic.requestedLoadingItems[index] = true;
       precacheImage(createImageProvider(type, logic, index, target), context);
     }
-    if (!ImageManager.haveTask) {
-      precacheNum += 3;
+    // Allow a little extra precache unless the network is already busy.
+    // haveTask used to stay true for the whole download-manager session and
+    // permanently blocked this path while downloads ran.
+    if (ImageManager.loadingCount < 4) {
+      precacheNum += 1;
       for (; index < precacheNum; index++) {
-        if (index >= logic.urls.length || logic.requestedLoadingItems[index]) {
-          return;
-        }
+        if (index >= logic.urls.length) return;
+        if (logic.requestedLoadingItems[index]) continue;
+        logic.requestedLoadingItems[index] = true;
         precacheImage(createImageProvider(type, logic, index, target), context);
       }
     }
